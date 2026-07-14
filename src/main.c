@@ -13,6 +13,7 @@
 #include "json_handler.h"    /* JSON_HANDLER */
 #include "txt_handler.h"     /* TXT_HANDLER */
 #include "md_handler.h"      /* MD_HANDLER */
+#include "i18n.h"            /* i18n_init, _() */
 #include "gui.h"             /* gui_run */
 
 #include <windows.h>         /* WinMain, HINSTANCE */
@@ -49,6 +50,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     MB_OK | MB_ICONERROR);
         return 1;  /* 非零退出码表示错误 */
     }
+
+    /* --- Step 1.5: Initialize i18n (auto-detect system language) ---
+     * 步骤 1.5：初始化多语言支持（自动检测系统语言）              */
+    i18n_init();
 
     /* --- Step 2: Register all built-in format handlers ---
      * 步骤 2：注册所有内置格式处理器                          */

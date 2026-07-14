@@ -51,11 +51,12 @@ echo "[1/2] Compiling... 编译中..."
     src/txt_handler.c \
     src/md_handler.c \
     src/converter.c \
-    src/gui.c 2>&1 | grep -E "error|warning|$" || true
+    src/gui.c \
+    src/i18n.c 2>&1 | grep -E "error|warning|$" || true
 
 # Check if obj files exist
 OBJFILES=""
-for f in main tree utils encoding format_handler json_handler txt_handler md_handler converter gui; do
+for f in main tree utils encoding format_handler json_handler txt_handler md_handler converter gui i18n; do
     if [ ! -f "obj/${f}.obj" ]; then
         echo "[ERROR] Compilation failed: obj/${f}.obj not found"
         exit 1

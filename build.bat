@@ -63,7 +63,7 @@ REM shell32.lib        : 浏览文件夹对话框
 set "LDFLAGS=/SUBSYSTEM:WINDOWS comctl32.lib comdlg32.lib shell32.lib gdi32.lib user32.lib kernel32.lib shlwapi.lib"
 
 REM --- Source files 源文件列表 ---
-set "SOURCES=%SRCDIR%\main.c %SRCDIR%\tree.c %SRCDIR%\utils.c %SRCDIR%\encoding.c %SRCDIR%\format_handler.c %SRCDIR%\json_handler.c %SRCDIR%\txt_handler.c %SRCDIR%\md_handler.c %SRCDIR%\converter.c %SRCDIR%\gui.c"
+set "SOURCES=%SRCDIR%\main.c %SRCDIR%\tree.c %SRCDIR%\utils.c %SRCDIR%\encoding.c %SRCDIR%\format_handler.c %SRCDIR%\json_handler.c %SRCDIR%\txt_handler.c %SRCDIR%\md_handler.c %SRCDIR%\converter.c %SRCDIR%\gui.c %SRCDIR%\i18n.c"
 
 echo ============================================================
 echo  Building Mind Map Conversion Tool

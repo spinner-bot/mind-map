@@ -31,6 +31,7 @@
 #define IDC_LOG_AREA        1011  /* Log display Edit (read-only) */
 #define IDC_FORMAT_LABEL    1012  /* "Output Format:" label */
 #define IDC_DIR_LABEL       1013  /* "Output Directory:" label */
+#define IDC_LANGUAGE        1014  /* Language ComboBox */
 
 /* Initialize and run the GUI message loop.
  * 初始化并运行 GUI 消息循环。

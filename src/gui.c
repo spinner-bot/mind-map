@@ -18,6 +18,7 @@
  * ============================================================ */
 
 #include "gui.h"
+#include "i18n.h"            /* _( ) macro for multi-language strings */
 #include "converter.h"       /* convert_file, convert_batch, BatchConfig, BatchResult */
 #include "format_handler.h"  /* FormatHandler, format_registry_*, handler_status_* */
 #include "utils.h"           /* path_get_filename, str_dup, SAFE_FREE */
@@ -429,6 +430,50 @@ static int WINAPI gui_query_callback(const char* title,
 }
 
 /* ================================================================
+ * UI Refresh (for language switching)  UI 刷新（语言切换用）
+ * ================================================================ */
+
+/* Refresh all user-visible text after language change.
+ * 语言切换后刷新所有用户可见的文本。                               */
+static void gui_refresh_ui(void) {
+    WCHAR* wtmp;
+    /* Update window title */
+    wtmp = utf8_to_wide(_(STR_WINDOW_TITLE));
+    if (wtmp) { SetWindowTextW(g_gui.hwnd, wtmp); free(wtmp); }
+    /* Update button labels */
+    wtmp = utf8_to_wide(_(STR_BTN_ADD_FILES));
+    if (wtmp) { SetWindowTextW(g_gui.hAddBtn, wtmp); free(wtmp); }
+    wtmp = utf8_to_wide(_(STR_BTN_REMOVE));
+    if (wtmp) { SetWindowTextW(g_gui.hRemoveBtn, wtmp); free(wtmp); }
+    wtmp = utf8_to_wide(_(STR_BTN_CLEAR_LIST));
+    if (wtmp) { SetWindowTextW(g_gui.hClearBtn, wtmp); free(wtmp); }
+    wtmp = utf8_to_wide(_(STR_BTN_BROWSE));
+    if (wtmp) { SetWindowTextW(g_gui.hBrowseBtn, wtmp); free(wtmp); }
+    wtmp = utf8_to_wide(_(STR_BTN_CONVERT_ALL));
+    if (wtmp) { SetWindowTextW(g_gui.hConvertAll, wtmp); free(wtmp); }
+    wtmp = utf8_to_wide(_(STR_BTN_CONVERT_SEL));
+    if (wtmp) { SetWindowTextW(g_gui.hConvertSel, wtmp); free(wtmp); }
+    /* Update labels */
+    wtmp = utf8_to_wide(_(STR_LABEL_INPUT_FILES));
+    if (wtmp) { SetWindowTextW(GetDlgItem(g_gui.hwnd, 2001), wtmp); free(wtmp); }
+    wtmp = utf8_to_wide(_(STR_LABEL_OUTPUT_FORMAT));
+    if (wtmp) { SetWindowTextW(GetDlgItem(g_gui.hwnd, IDC_FORMAT_LABEL), wtmp); free(wtmp); }
+    wtmp = utf8_to_wide(_(STR_LABEL_OUTPUT_DIR));
+    if (wtmp) { SetWindowTextW(GetDlgItem(g_gui.hwnd, IDC_DIR_LABEL), wtmp); free(wtmp); }
+    wtmp = utf8_to_wide(_(STR_LABEL_LANGUAGE));
+    if (wtmp) { SetWindowTextW(GetDlgItem(g_gui.hwnd, 2002), wtmp); free(wtmp); }
+    /* Update ListView column headers */
+    LVCOLUMNW lvc = { 0 };
+    lvc.mask = LVCF_TEXT;
+    wtmp = utf8_to_wide(_(STR_COL_INDEX));
+    if (wtmp) { lvc.pszText = wtmp; SendMessageW(g_gui.hFileList, LVM_SETCOLUMNW, 0, (LPARAM)&lvc); free(wtmp); }
+    wtmp = utf8_to_wide(_(STR_COL_PATH));
+    if (wtmp) { lvc.pszText = wtmp; SendMessageW(g_gui.hFileList, LVM_SETCOLUMNW, 1, (LPARAM)&lvc); free(wtmp); }
+    wtmp = utf8_to_wide(_(STR_COL_FORMAT));
+    if (wtmp) { lvc.pszText = wtmp; SendMessageW(g_gui.hFileList, LVM_SETCOLUMNW, 2, (LPARAM)&lvc); free(wtmp); }
+}
+
+/* ================================================================
  * Conversion Execution  转换执行
  * ================================================================ */
 
@@ -567,10 +612,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
             HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
             /* --- File list label --- */
-            CreateWindowW(L"STATIC", L"Input Files:",
-                          WS_CHILD | WS_VISIBLE,
-                          10, 10, 200, 20,
-                          hwnd, NULL, NULL, NULL);
+            {
+                WCHAR* wl = utf8_to_wide(_(STR_LABEL_INPUT_FILES));
+                CreateWindowW(L"STATIC", wl ? wl : L"Input Files:",
+                              WS_CHILD | WS_VISIBLE,
+                              10, 10, 200, 20,
+                              hwnd, (HMENU)2001, NULL, NULL);
+                if (wl) free(wl);
+            }
 
             /* --- File ListView (report mode) --- */
             g_gui.hFileList = CreateWindowW(WC_LISTVIEWW, L"",
@@ -586,48 +635,74 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
             lvc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
 
             lvc.iSubItem = 0;
-            lvc.pszText = L"#";
-            lvc.cx = 40;
-            ListView_InsertColumn(g_gui.hFileList, 0, &lvc);
+            {
+                WCHAR* wcol = utf8_to_wide(_(STR_COL_INDEX));
+                lvc.pszText = wcol ? wcol : L"#";
+                lvc.cx = 40;
+                ListView_InsertColumn(g_gui.hFileList, 0, &lvc);
+                if (wcol) free(wcol);
+            }
 
             lvc.iSubItem = 1;
-            lvc.pszText = L"File Path";
-            lvc.cx = 420;
-            ListView_InsertColumn(g_gui.hFileList, 1, &lvc);
+            {
+                WCHAR* wcol = utf8_to_wide(_(STR_COL_PATH));
+                lvc.pszText = wcol ? wcol : L"File Path";
+                lvc.cx = 420;
+                ListView_InsertColumn(g_gui.hFileList, 1, &lvc);
+                if (wcol) free(wcol);
+            }
 
             lvc.iSubItem = 2;
-            lvc.pszText = L"Format";
-            lvc.cx = 160;
-            ListView_InsertColumn(g_gui.hFileList, 2, &lvc);
+            {
+                WCHAR* wcol = utf8_to_wide(_(STR_COL_FORMAT));
+                lvc.pszText = wcol ? wcol : L"Format";
+                lvc.cx = 160;
+                ListView_InsertColumn(g_gui.hFileList, 2, &lvc);
+                if (wcol) free(wcol);
+            }
 
             /* Extended ListView styles: full row select */
             ListView_SetExtendedListViewStyle(g_gui.hFileList,
                 LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
 
             /* --- Buttons --- */
-            g_gui.hAddBtn = CreateWindowW(L"BUTTON", L"Add File(s)",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                670, 30, 100, 30, hwnd,
-                (HMENU)IDC_ADD_FILES, NULL, NULL);
-            SendMessage(g_gui.hAddBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
-
-            g_gui.hRemoveBtn = CreateWindowW(L"BUTTON", L"Remove",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                670, 70, 100, 30, hwnd,
-                (HMENU)IDC_REMOVE_FILE, NULL, NULL);
-            SendMessage(g_gui.hRemoveBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
-
-            g_gui.hClearBtn = CreateWindowW(L"BUTTON", L"Clear List",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                670, 110, 100, 30, hwnd,
-                (HMENU)IDC_CLEAR_LIST, NULL, NULL);
-            SendMessage(g_gui.hClearBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
+            {
+                WCHAR* wb = utf8_to_wide(_(STR_BTN_ADD_FILES));
+                g_gui.hAddBtn = CreateWindowW(L"BUTTON", wb ? wb : L"Add",
+                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                    670, 30, 100, 30, hwnd,
+                    (HMENU)IDC_ADD_FILES, NULL, NULL);
+                SendMessage(g_gui.hAddBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
+                if (wb) free(wb);
+            }
+            {
+                WCHAR* wb = utf8_to_wide(_(STR_BTN_REMOVE));
+                g_gui.hRemoveBtn = CreateWindowW(L"BUTTON", wb ? wb : L"Remove",
+                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                    670, 70, 100, 30, hwnd,
+                    (HMENU)IDC_REMOVE_FILE, NULL, NULL);
+                SendMessage(g_gui.hRemoveBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
+                if (wb) free(wb);
+            }
+            {
+                WCHAR* wb = utf8_to_wide(_(STR_BTN_CLEAR_LIST));
+                g_gui.hClearBtn = CreateWindowW(L"BUTTON", wb ? wb : L"Clear",
+                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                    670, 110, 100, 30, hwnd,
+                    (HMENU)IDC_CLEAR_LIST, NULL, NULL);
+                SendMessage(g_gui.hClearBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
+                if (wb) free(wb);
+            }
 
             /* --- Output Format --- */
-            CreateWindowW(L"STATIC", L"Output Format:",
-                WS_CHILD | WS_VISIBLE,
-                10, 225, 120, 20,
-                hwnd, (HMENU)IDC_FORMAT_LABEL, NULL, NULL);
+            {
+                WCHAR* wl = utf8_to_wide(_(STR_LABEL_OUTPUT_FORMAT));
+                CreateWindowW(L"STATIC", wl ? wl : L"Output Format:",
+                    WS_CHILD | WS_VISIBLE,
+                    10, 225, 120, 20,
+                    hwnd, (HMENU)IDC_FORMAT_LABEL, NULL, NULL);
+                if (wl) free(wl);
+            }
 
             g_gui.hFormatCombo = CreateWindowW(L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST,
@@ -650,10 +725,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
             SendMessage(g_gui.hFormatCombo, CB_SETCURSEL, 0, 0);
 
             /* --- Output Directory --- */
-            CreateWindowW(L"STATIC", L"Output Directory:",
-                WS_CHILD | WS_VISIBLE,
-                10, 255, 120, 20,
-                hwnd, (HMENU)IDC_DIR_LABEL, NULL, NULL);
+            {
+                WCHAR* wl = utf8_to_wide(_(STR_LABEL_OUTPUT_DIR));
+                CreateWindowW(L"STATIC", wl ? wl : L"Output Directory:",
+                    WS_CHILD | WS_VISIBLE,
+                    10, 255, 120, 20,
+                    hwnd, (HMENU)IDC_DIR_LABEL, NULL, NULL);
+                if (wl) free(wl);
+            }
 
             g_gui.hOutputDir = CreateWindowW(L"EDIT", L".",
                 WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
@@ -662,33 +741,71 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
             SendMessage(g_gui.hOutputDir, WM_SETFONT,
                         (WPARAM)hFont, TRUE);
 
-            g_gui.hBrowseBtn = CreateWindowW(L"BUTTON", L"Browse...",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                550, 250, 100, 27, hwnd,
-                (HMENU)IDC_BROWSE_DIR, NULL, NULL);
-            SendMessage(g_gui.hBrowseBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
+            {
+                WCHAR* wb = utf8_to_wide(_(STR_BTN_BROWSE));
+                g_gui.hBrowseBtn = CreateWindowW(L"BUTTON", wb ? wb : L"Browse...",
+                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                    550, 250, 100, 27, hwnd,
+                    (HMENU)IDC_BROWSE_DIR, NULL, NULL);
+                SendMessage(g_gui.hBrowseBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
+                if (wb) free(wb);
+            }
+
+            /* --- Language Selector --- */
+            {
+                WCHAR* wl = utf8_to_wide(_(STR_LABEL_LANGUAGE));
+                CreateWindowW(L"STATIC", wl ? wl : L"Language:",
+                    WS_CHILD | WS_VISIBLE,
+                    10, 285, 60, 20,
+                    hwnd, (HMENU)2002, NULL, NULL);
+                if (wl) free(wl);
+            }
+            {
+                HWND hLangCombo = CreateWindowW(L"COMBOBOX", L"",
+                    WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST,
+                    75, 282, 100, 200, hwnd,
+                    (HMENU)IDC_LANGUAGE, NULL, NULL);
+                SendMessage(hLangCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
+                /* Add language options */
+                WCHAR* wlang;
+                wlang = utf8_to_wide(_(STR_LANG_ENGLISH));
+                SendMessageW(hLangCombo, CB_ADDSTRING, 0, (LPARAM)(wlang ? wlang : L"English"));
+                if (wlang) free(wlang);
+                wlang = utf8_to_wide(_(STR_LANG_CHINESE));
+                SendMessageW(hLangCombo, CB_ADDSTRING, 0, (LPARAM)(wlang ? wlang : L"Chinese"));
+                if (wlang) free(wlang);
+                /* Select current language */
+                SendMessage(hLangCombo, CB_SETCURSEL, (WPARAM)i18n_get_language(), 0);
+            }
 
             /* --- Convert Buttons --- */
-            g_gui.hConvertAll = CreateWindowW(L"BUTTON",
-                L"Convert All",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                10, 290, 150, 35, hwnd,
-                (HMENU)IDC_CONVERT_ALL, NULL, NULL);
-            SendMessage(g_gui.hConvertAll, WM_SETFONT,
-                        (WPARAM)hFont, TRUE);
-
-            g_gui.hConvertSel = CreateWindowW(L"BUTTON",
-                L"Convert Selected",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                170, 290, 150, 35, hwnd,
-                (HMENU)IDC_CONVERT_SEL, NULL, NULL);
-            SendMessage(g_gui.hConvertSel, WM_SETFONT,
-                        (WPARAM)hFont, TRUE);
+            {
+                WCHAR* wb = utf8_to_wide(_(STR_BTN_CONVERT_ALL));
+                g_gui.hConvertAll = CreateWindowW(L"BUTTON",
+                    wb ? wb : L"Convert All",
+                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                    10, 315, 150, 35, hwnd,
+                    (HMENU)IDC_CONVERT_ALL, NULL, NULL);
+                SendMessage(g_gui.hConvertAll, WM_SETFONT,
+                            (WPARAM)hFont, TRUE);
+                if (wb) free(wb);
+            }
+            {
+                WCHAR* wb = utf8_to_wide(_(STR_BTN_CONVERT_SEL));
+                g_gui.hConvertSel = CreateWindowW(L"BUTTON",
+                    wb ? wb : L"Convert Selected",
+                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                    170, 315, 150, 35, hwnd,
+                    (HMENU)IDC_CONVERT_SEL, NULL, NULL);
+                SendMessage(g_gui.hConvertSel, WM_SETFONT,
+                            (WPARAM)hFont, TRUE);
+                if (wb) free(wb);
+            }
 
             /* --- Progress Bar --- */
             g_gui.hProgress = CreateWindowW(PROGRESS_CLASSW, L"",
                 WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
-                330, 295, 330, 25, hwnd,
+                330, 320, 330, 25, hwnd,
                 (HMENU)IDC_PROGRESS_BAR, NULL, NULL);
 
             /* --- Log Area --- */
@@ -696,15 +813,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
                 WS_CHILD | WS_VISIBLE | WS_BORDER |
                 ES_MULTILINE | ES_READONLY | WS_VSCROLL |
                 ES_AUTOVSCROLL,
-                10, 340, 860, 260, hwnd,
+                10, 360, 860, 240, hwnd,
                 (HMENU)IDC_LOG_AREA, NULL, NULL);
             SendMessage(g_gui.hLog, WM_SETFONT, (WPARAM)hFont, TRUE);
 
             /* Set default font for all controls */
             /* (already set per-control above) */
 
-            gui_log("Mind Map Conversion Tool started");
-            gui_log("Registered %d output format(s)",
+            gui_log("%s", _(STR_LOG_STARTED));
+            gui_log(_(STR_LOG_FORMATS),
                      g_gui.output_handler_count);
 
             return 0;
@@ -718,12 +835,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
             int height = HIWORD(lParam);
 
             if (g_gui.hLog != NULL) {
-                MoveWindow(g_gui.hLog, 10, 340,
-                           width - 30, height - 350, TRUE);
+                MoveWindow(g_gui.hLog, 10, 360,
+                           width - 30, height - 370, TRUE);
             }
             /* Resize progress bar 调整进度条大小 */
             if (g_gui.hProgress != NULL) {
-                MoveWindow(g_gui.hProgress, 330, 295,
+                MoveWindow(g_gui.hProgress, 330, 320,
                            width - 350, 25, TRUE);
             }
             return 0;
@@ -752,6 +869,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
 
                 case IDC_CONVERT_ALL:
                     gui_run_conversion();
+                    break;
+
+                case IDC_LANGUAGE:
+                    if (HIWORD(wParam) == CBN_SELCHANGE) {
+                        int lang_idx = (int)SendMessage(
+                            GetDlgItem(hwnd, IDC_LANGUAGE), CB_GETCURSEL, 0, 0);
+                        if (lang_idx >= 0) {
+                            i18n_set_language((I18nLanguage)lang_idx);
+                            gui_refresh_ui();
+                            gui_log("Language switched to: %s",
+                                    lang_idx == LANG_ZH ? "中文" : "English");
+                        }
+                    }
                     break;
 
                 case IDC_CONVERT_SEL:
