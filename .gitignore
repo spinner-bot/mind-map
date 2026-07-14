@@ -1,0 +1,28 @@
+# ============================================================
+# Mind Map Conversion Tool - Git Ignore Rules
+# 思维导图多格式转换工具 - Git 忽略规则
+# ============================================================
+
+# --- Build artifacts 构建产物 ---
+obj/
+*.o
+*.exe
+
+# --- IDE and editor files IDE与编辑器文件 ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS generated files 操作系统生成文件 ---
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# --- Debug files 调试文件 ---
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
