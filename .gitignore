@@ -6,10 +6,11 @@
 # --- Build artifacts 构建产物 ---
 obj/
 *.o
+*.obj
 *.exe
 
 # --- IDE and editor files IDE与编辑器文件 ---
-.vscode/
+# .vscode/ is committed (contains project build tasks)
 .idea/
 *.swp
 *.swo
