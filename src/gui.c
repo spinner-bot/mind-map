@@ -33,6 +33,39 @@
 #include <time.h>            /* time */
 
 /* ================================================================
+ * UTF-8 ↔ Wide String Helpers
+ * UTF-8 ↔ 宽字符串转换辅助函数
+ * ================================================================ */
+
+/* Convert a UTF-8 string to a wide-character string.
+ * 将 UTF-8 字符串转换为宽字符字符串。
+ * Returns heap-allocated WCHAR* (caller must free()).
+ * 返回堆分配的 WCHAR*（调用者必须 free()）。                   */
+static WCHAR* utf8_to_wide(const char* utf8) {
+    if (utf8 == NULL) return NULL;
+    int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (len <= 0) return NULL;
+    WCHAR* wide = (WCHAR*)malloc(len * sizeof(WCHAR));
+    if (wide == NULL) return NULL;
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, len);
+    return wide;
+}
+
+/* Convert a wide-character string to UTF-8.
+ * 将宽字符字符串转换为 UTF-8。
+ * Returns heap-allocated char* (caller must free()).
+ * 返回堆分配的 char*（调用者必须 free()）。                    */
+static char* wide_to_utf8(const WCHAR* wide) {
+    if (wide == NULL) return NULL;
+    int len = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
+    if (len <= 0) return NULL;
+    char* utf8 = (char*)malloc(len);
+    if (utf8 == NULL) return NULL;
+    WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8, len, NULL, NULL);
+    return utf8;
+}
+
+/* ================================================================
  * Global State (per-instance for this single-window app)
  * 全局状态（此单窗口应用的实例状态）
  * ================================================================ */
@@ -111,9 +144,13 @@ static void gui_log(const char* fmt, ...) {
                                    "[%s] %s\r\n", time_str, msg);
     }
 
-    /* Update the Edit control 更新 Edit 控件 */
+    /* Update the Edit control with wide string 用宽字符串更新 Edit */
     if (g_gui.hLog != NULL) {
-        SetWindowTextA(g_gui.hLog, g_gui.log_text);
+        WCHAR* wlog = utf8_to_wide(g_gui.log_text);
+        if (wlog != NULL) {
+            SetWindowTextW(g_gui.hLog, wlog);
+            free(wlog);
+        }
         /* Scroll to bottom 滚动到底部 */
         int len = GetWindowTextLength(g_gui.hLog);
         SendMessage(g_gui.hLog, EM_SETSEL, (WPARAM)len, (LPARAM)len);
@@ -154,28 +191,37 @@ static void gui_add_file(const char* filepath) {
     entry->handler = handler;
     g_gui.file_count++;
 
-    /* Add to ListView 添加到 ListView */
-    LVITEMA lvi = { 0 };
+    /* Add to ListView (Unicode API for Chinese path support)
+     * 添加到 ListView（Unicode API 支持中文路径） */
+    LVITEMW lvi = { 0 };
     lvi.mask = LVIF_TEXT;
     lvi.iItem = g_gui.file_count - 1;
 
     /* Column 0: index number 索引号 */
-    char idx_str[16];
-    snprintf(idx_str, sizeof(idx_str), "%d", g_gui.file_count);
+    WCHAR idx_str[16];
+    _snwprintf(idx_str, 16, L"%d", g_gui.file_count);
     lvi.pszText = idx_str;
     lvi.iSubItem = 0;
-    int pos = (int)SendMessage(g_gui.hFileList, LVM_INSERTITEMA, 0, (LPARAM)&lvi);
+    int pos = (int)SendMessageW(g_gui.hFileList, LVM_INSERTITEMW, 0, (LPARAM)&lvi);
 
     /* Column 1: file path 文件路径 */
-    lvi.iItem = pos;
-    lvi.iSubItem = 1;
-    lvi.pszText = (LPSTR)filepath;
-    SendMessage(g_gui.hFileList, LVM_SETITEMA, 0, (LPARAM)&lvi);
+    WCHAR* wpath = utf8_to_wide(filepath);
+    if (wpath != NULL) {
+        lvi.iItem = pos;
+        lvi.iSubItem = 1;
+        lvi.pszText = wpath;
+        SendMessageW(g_gui.hFileList, LVM_SETITEMW, 0, (LPARAM)&lvi);
+        free(wpath);
+    }
 
     /* Column 2: format 格式 */
-    lvi.iSubItem = 2;
-    lvi.pszText = (LPSTR)format_name;
-    SendMessage(g_gui.hFileList, LVM_SETITEMA, 0, (LPARAM)&lvi);
+    WCHAR* wfmt = utf8_to_wide(format_name);
+    if (wfmt != NULL) {
+        lvi.iSubItem = 2;
+        lvi.pszText = wfmt;
+        SendMessageW(g_gui.hFileList, LVM_SETITEMW, 0, (LPARAM)&lvi);
+        free(wfmt);
+    }
 
     gui_log("Added: %s [%s]", path_get_filename(filepath), format_name);
 }
@@ -198,11 +244,12 @@ static void gui_remove_selected(void) {
     }
     g_gui.file_count--;
 
-    /* Update index numbers in ListView 更新 ListView 中的索引号 */
+    /* Update index numbers in ListView (use wide API)
+     * 更新 ListView 中的索引号（使用 Unicode API） */
     for (int i = sel; i < g_gui.file_count; i++) {
-        char idx_str[16];
-        snprintf(idx_str, sizeof(idx_str), "%d", i + 1);
-        ListView_SetItemText(g_gui.hFileList, i, 0, idx_str);
+        WCHAR widx[16];
+        _snwprintf(widx, 16, L"%d", i + 1);
+        ListView_SetItemText(g_gui.hFileList, i, 0, widx);
     }
 
     gui_log("Removed file at position %d", sel + 1);
@@ -287,7 +334,8 @@ static void gui_show_browse_dir(void) {
             char utf8_dir[MAX_PATH_LEN];
             WideCharToMultiByte(CP_UTF8, 0, wdir, -1,
                                 utf8_dir, sizeof(utf8_dir), NULL, NULL);
-            SetWindowTextA(g_gui.hOutputDir, utf8_dir);
+            /* Use wide string directly to avoid encoding issues */
+            SetWindowTextW(g_gui.hOutputDir, wdir);
             strncpy(g_gui.output_dir, utf8_dir, MAX_PATH_LEN - 1);
             gui_log("Output directory: %s", utf8_dir);
         }
@@ -383,25 +431,29 @@ static int WINAPI gui_query_callback(const char* title,
  * 使用当前设置运行批量转换。                                     */
 static void gui_run_conversion(void) {
     if (g_gui.file_count == 0) {
-        MessageBoxA(g_gui.hwnd,
-                    "No input files in the list.",
-                    "Mind Map Tool", MB_OK | MB_ICONWARNING);
+        MessageBoxW(g_gui.hwnd,
+                    L"No input files in the list.",
+                    L"Mind Map Tool", MB_OK | MB_ICONWARNING);
         return;
     }
 
     /* Get selected output format 获取选择的输出格式 */
     int fmt_idx = (int)SendMessage(g_gui.hFormatCombo, CB_GETCURSEL, 0, 0);
     if (fmt_idx < 0 || fmt_idx >= g_gui.output_handler_count) {
-        MessageBoxA(g_gui.hwnd,
-                    "Please select an output format.",
-                    "Mind Map Tool", MB_OK | MB_ICONWARNING);
+        MessageBoxW(g_gui.hwnd,
+                    L"Please select an output format.",
+                    L"Mind Map Tool", MB_OK | MB_ICONWARNING);
         return;
     }
     FormatHandler* out_handler = g_gui.output_handlers[fmt_idx];
 
-    /* Get output directory 获取输出目录 */
+    /* Get output directory (Unicode, then convert to UTF-8)
+     * 获取输出目录（Unicode，再转为 UTF-8） */
+    WCHAR wdir[MAX_PATH];
+    GetWindowTextW(g_gui.hOutputDir, wdir, MAX_PATH);
     char out_dir[MAX_PATH_LEN];
-    GetWindowTextA(g_gui.hOutputDir, out_dir, sizeof(out_dir));
+    WideCharToMultiByte(CP_UTF8, 0, wdir, -1,
+                        out_dir, sizeof(out_dir), NULL, NULL);
     if (out_dir[0] == '\0') {
         strcpy(out_dir, ".");
     }
@@ -705,9 +757,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
 
                 case IDC_OUTPUT_DIR:
                     if (HIWORD(wParam) == EN_CHANGE) {
-                        GetWindowTextA(g_gui.hOutputDir,
-                                       g_gui.output_dir,
-                                       sizeof(g_gui.output_dir));
+                        WCHAR wbuf[MAX_PATH];
+                        GetWindowTextW(g_gui.hOutputDir, wbuf, MAX_PATH);
+                        WideCharToMultiByte(CP_UTF8, 0, wbuf, -1,
+                            g_gui.output_dir, sizeof(g_gui.output_dir), NULL, NULL);
                     }
                     break;
             }
