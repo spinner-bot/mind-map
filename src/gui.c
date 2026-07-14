@@ -249,7 +249,12 @@ static void gui_remove_selected(void) {
     for (int i = sel; i < g_gui.file_count; i++) {
         WCHAR widx[16];
         _snwprintf(widx, 16, L"%d", i + 1);
-        ListView_SetItemText(g_gui.hFileList, i, 0, widx);
+        LVITEMW lvi2 = { 0 };
+        lvi2.mask = LVIF_TEXT;
+        lvi2.iItem = i;
+        lvi2.iSubItem = 0;
+        lvi2.pszText = widx;
+        SendMessageW(g_gui.hFileList, LVM_SETITEMW, 0, (LPARAM)&lvi2);
     }
 
     gui_log("Removed file at position %d", sel + 1);
