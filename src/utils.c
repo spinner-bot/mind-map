@@ -416,7 +416,12 @@ bool path_is_file(const char* filepath) {
     if (stat(filepath, &st) != 0) {
         return false;  /* 无法访问（不存在、权限不足等） */
     }
+#ifdef _WIN32
+    /* Windows/MSVC doesn't have S_ISREG macro — use _S_IFREG */
+    return (st.st_mode & _S_IFREG) != 0;
+#else
     return S_ISREG(st.st_mode);
+#endif
 }
 
 /* 从路径中提取文件名部分。
