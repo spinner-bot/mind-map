@@ -502,6 +502,11 @@ void tree_traverse_levelorder(Tree* tree, TreeTraverseFunc callback,
 /* 计算树的最大深度。
  * 遍历所有节点，取 depth 字段的最大值。
  * 仅含 root 的树深度为 0。                                       */
+/* Forward declaration for find_max_depth_recursive.
+ * MSVC requires this since the static function is defined after tree_max_depth.
+ * MSVC 要求在 tree_max_depth 之前声明此静态函数。            */
+static void find_max_depth_recursive(TreeNode* node, int* max_d_ptr);
+
 int tree_max_depth(const Tree* tree) {
     if (tree == NULL || tree->root == NULL) {
         return -1;  /* 无效的树返回 -1 */
@@ -697,7 +702,7 @@ bool tree_validate(const Tree* tree, char* error_buf, int buf_size) {
             if (child->parent != node) {
                 if (error_buf && buf_size > 0) {
                     snprintf(error_buf, buf_size,
-                             "Child at index %d has incorrect parent pointer");
+                             "Child at index %d has incorrect parent pointer", i);
                 }
                 free(queue);
                 return false;
