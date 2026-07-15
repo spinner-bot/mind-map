@@ -5,10 +5,22 @@
             "label": "Build",
             "type": "shell",
             "command": "${workspaceFolder}/build.sh",
+            "group": "build",
+            "problemMatcher": "$msCompile",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Build & Run",
+            "type": "shell",
+            "command": "${workspaceFolder}/build.sh && ${workspaceFolder}/mind_map.exe",
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
+            "dependsOn": [],
             "problemMatcher": "$msCompile",
             "presentation": {
                 "reveal": "always",
@@ -19,16 +31,6 @@
             "label": "Clean",
             "type": "shell",
             "command": "rm -rf obj/*.obj mind_map.exe",
-            "presentation": {
-                "reveal": "always"
-            }
-        },
-        {
-            "label": "Run",
-            "type": "shell",
-            "command": "${workspaceFolder}/mind_map.exe",
-            "dependsOn": ["Build"],
-            "problemMatcher": [],
             "presentation": {
                 "reveal": "always"
             }
