@@ -207,13 +207,27 @@ static bool serve_static_file(const char* url_path, SOCKET cli_sock) {
         return false;
     }
 
+    /* 剥离查询字符串（?v=2 等）。HTTP 解析器保留完整路径含 ?query，
+     * 但文件系统路径不能包含 ? 字符。                              */
+    char clean_path[SERVER_MAX_PATH];
+    strncpy(clean_path, url_path, SERVER_MAX_PATH - 1);
+    clean_path[SERVER_MAX_PATH - 1] = '\0';
+    char* qmark = strchr(clean_path, '?');
+    if (qmark != NULL) *qmark = '\0';  /* 截断查询字符串 */
+
+    /* 将 URL 路径中的 / 统一转为 Windows 的 \ */
+    for (char* p = clean_path; *p; p++) {
+        if (*p == '/') *p = '\\';
+    }
+
     /* 构建本地文件路径: web/ + URL path */
     char file_path[1024];
-    /* 对于根路径 "/"，返回 index.html */
-    if (strcmp(url_path, "/") == 0) {
-        snprintf(file_path, sizeof(file_path), "%s/index.html", g_base_dir);
+    /* 对于根路径 "\" 或 "/"，返回 index.html */
+    if (strcmp(clean_path, "\\") == 0 || strcmp(clean_path, "/") == 0 ||
+        clean_path[0] == '\0') {
+        snprintf(file_path, sizeof(file_path), "%s\\index.html", g_base_dir);
     } else {
-        snprintf(file_path, sizeof(file_path), "%s%s", g_base_dir, url_path);
+        snprintf(file_path, sizeof(file_path), "%s%s", g_base_dir, clean_path);
     }
 
     /* Unicode-safe file open: convert UTF-8 path to wide string.
@@ -237,9 +251,9 @@ static bool serve_static_file(const char* url_path, SOCKET cli_sock) {
 #endif
     if (fp == NULL) {
         /* 对于未知路径且无扩展名的，尝试作为 SPA 路由返回 index.html */
-        const char* ext = strrchr(url_path, '.');
-        if (ext == NULL && strcmp(url_path, "/") != 0) {
-            snprintf(file_path, sizeof(file_path), "%s/index.html", g_base_dir);
+        const char* ext = strrchr(clean_path, '.');
+        if (ext == NULL && clean_path[0] != '\0') {
+            snprintf(file_path, sizeof(file_path), "%s\\index.html", g_base_dir);
 #ifdef _WIN32
             wlen = MultiByteToWideChar(CP_UTF8, 0, file_path, -1, NULL, 0);
             if (wlen > 0) {
@@ -1380,6 +1394,7 @@ bool server_init(void) {
     /* 转为 UTF-8 */
     WideCharToMultiByte(CP_UTF8, 0, wpath, -1,
                         g_base_dir, sizeof(g_base_dir), NULL, NULL);
+    printf("[OK] Web directory: %s\n", g_base_dir);
 #else
     strcpy(g_base_dir, SERVER_WEB_DIR);
 #endif
