@@ -216,14 +216,43 @@ static bool serve_static_file(const char* url_path, SOCKET cli_sock) {
         snprintf(file_path, sizeof(file_path), "%s%s", g_base_dir, url_path);
     }
 
-    /* 读取文件 */
-    FILE* fp = fopen(file_path, "rb");
+    /* Unicode-safe file open: convert UTF-8 path to wide string.
+     * 使用 Unicode 安全方式打开文件：UTF-8 路径 → 宽字符串 → _wfopen。
+     * 不能用 fopen，因为 Windows 的 fopen 期望 ANSI 编码（GBK），
+     * 而 g_base_dir 存的是 UTF-8，含中文路径会乱码。             */
+    FILE* fp = NULL;
+#ifdef _WIN32
+    int wlen;
+    wlen = MultiByteToWideChar(CP_UTF8, 0, file_path, -1, NULL, 0);
+    if (wlen > 0) {
+        WCHAR* wpath = (WCHAR*)malloc(wlen * sizeof(WCHAR));
+        if (wpath != NULL) {
+            MultiByteToWideChar(CP_UTF8, 0, file_path, -1, wpath, wlen);
+            fp = _wfopen(wpath, L"rb");
+            free(wpath);
+        }
+    }
+#else
+    fp = fopen(file_path, "rb");
+#endif
     if (fp == NULL) {
         /* 对于未知路径且无扩展名的，尝试作为 SPA 路由返回 index.html */
         const char* ext = strrchr(url_path, '.');
         if (ext == NULL && strcmp(url_path, "/") != 0) {
             snprintf(file_path, sizeof(file_path), "%s/index.html", g_base_dir);
+#ifdef _WIN32
+            wlen = MultiByteToWideChar(CP_UTF8, 0, file_path, -1, NULL, 0);
+            if (wlen > 0) {
+                WCHAR* wpath2 = (WCHAR*)malloc(wlen * sizeof(WCHAR));
+                if (wpath2 != NULL) {
+                    MultiByteToWideChar(CP_UTF8, 0, file_path, -1, wpath2, wlen);
+                    fp = _wfopen(wpath2, L"rb");
+                    free(wpath2);
+                }
+            }
+#else
             fp = fopen(file_path, "rb");
+#endif
         }
         if (fp == NULL) {
             send_json_error(HTTP_404_NOT_FOUND, "File not found", cli_sock);
