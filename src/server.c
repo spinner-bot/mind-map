@@ -1273,8 +1273,8 @@ typedef struct {
 static const Route g_routes[] = {
     { "POST", "/api/file/open",      api_file_open      },
     { "POST", "/api/file/save",      api_file_save      },
-    { "POST", "/api/file/import",    api_file_import    },
     { "POST", "/api/file/import-content", api_file_import_content },
+    { "POST", "/api/file/import",    api_file_import    },
     { "POST", "/api/file/export",    api_file_export    },
     { "POST", "/api/tree",           api_tree_get       },
     { "GET",  "/api/tree",           api_tree_get       },
@@ -1304,16 +1304,29 @@ static void handle_request(const HttpRequest* req, SOCKET cli_sock) {
         return;
     }
 
-    /* Check API routes */
+    /* Check API routes.
+     * POST 路由用 strcmp 精确匹配；GET 路由用 strncmp 前缀匹配
+     *（因为 GET /api/search?q=... 路径含查询字符串）。           */
     for (size_t i = 0; i < ROUTE_COUNT; i++) {
-        if (strcmp(req->method, g_routes[i].method) == 0 &&
-            strncmp(req->path, g_routes[i].path, strlen(g_routes[i].path)) == 0) {
-            /* For GET search, match prefix (path may have ?q=...) */
-            if (strcmp(req->method, "GET") == 0 &&
-                strncmp(g_routes[i].path, "/api/search", 11) == 0) {
-                /* Exact route match check passed, but need prefix match */
-                /* /api/search starts with /api/search */
-            }
+        if (strcmp(req->method, g_routes[i].method) != 0) continue;
+
+        bool matched = false;
+        if (strcmp(req->method, "GET") == 0) {
+            /* GET: prefix match (path may have ?q=...) */
+            size_t route_len = strlen(g_routes[i].path);
+            matched = (strncmp(req->path, g_routes[i].path, route_len) == 0);
+        } else {
+            /* POST: exact match or match before '?' */
+            size_t req_path_len = strlen(req->path);
+            /* Strip trailing query string from request path for comparison */
+            const char* qm = strchr(req->path, '?');
+            if (qm != NULL) req_path_len = (size_t)(qm - req->path);
+            size_t route_len = strlen(g_routes[i].path);
+            matched = (req_path_len == route_len &&
+                       strncmp(req->path, g_routes[i].path, route_len) == 0);
+        }
+
+        if (matched) {
             g_routes[i].handler(req, cli_sock);
             return;
         }
