@@ -57,7 +57,12 @@ function onMouseDown(e) {
     if (State.hoveredNode) {
         const btnDir = hitTestHoverButton(Mouse.x, Mouse.y);
         if (btnDir) {
-            handleHoverButtonClick(State.hoveredNode, btnDir);
+            try {
+                handleHoverButtonClick(State.hoveredNode, btnDir);
+            } catch (err) {
+                console.error('Button click error:', err);
+                showToast('Error: ' + err.message);
+            }
             Mouse.down = false;  /* Don't start drag for button clicks */
             return;
         }
@@ -225,65 +230,61 @@ function onMouseLeave() {
 }
 
 /* --- Hover Button Actions / 悬停按钮操作 --- */
-function handleHoverButtonClick(node, direction) {
+async function handleHoverButtonClick(node, direction) {
     const addr = getNodeAddrString(node);
-    switch (direction) {
-        case 'left':  /* Toggle expand/collapse 切换展开折叠 */
-            toggleExpand(node, addr);
-            break;
-        case 'right':  /* Add child node 添加子节点 */
-            addChildAndRefresh(addr);
-            break;
-        case 'top':  /* Insert sibling before 在前插入同级 */
-            insertSibling(addr, 'before');
-            break;
-        case 'bottom':  /* Insert sibling after 在后插入同级 */
-            insertSibling(addr, 'after');
-            break;
+    try {
+        switch (direction) {
+            case 'left':  /* Toggle expand/collapse 切换展开折叠 */
+                await toggleExpand(node, addr);
+                showToast('Toggled / 已切换');
+                break;
+            case 'right':  /* Add child node 添加子节点 */
+                await addChildAndRefresh(addr);
+                showToast('Child added / 已添加子节点');
+                break;
+            case 'top':  /* Insert sibling before 在前插入同级 */
+                await insertSibling(addr, 'before');
+                showToast('Sibling inserted / 已插入同级节点');
+                break;
+            case 'bottom':  /* Insert sibling after 在后插入同级 */
+                await insertSibling(addr, 'after');
+                showToast('Sibling inserted / 已插入同级节点');
+                break;
+        }
+    } catch (err) {
+        console.error('Button action failed:', err);
+        showToast('Failed: ' + err.message);
     }
 }
 
 async function toggleExpand(node, addr) {
     const expanded = node.expanded !== false ? false : true;
-    try {
-        await API.updateNode(addr, { expanded: expanded });
-        State.treeData = await API.getTree();
-        State.isDirty = true;
-        render();
-    } catch (err) {
-        console.error('Toggle expand failed:', err);
-    }
+    await API.updateNode(addr, { expanded: expanded });
+    State.treeData = await API.getTree();
+    State.isDirty = true;
+    render();
 }
 
 async function addChildAndRefresh(addr) {
-    try {
-        await API.addNode(addr, '', -1);
-        State.treeData = await API.getTree();
-        State.isDirty = true;
-        updateStats();
-        render();
-    } catch (err) {
-        console.error('Add child failed:', err);
-    }
+    await API.addNode(addr, '', -1);
+    State.treeData = await API.getTree();
+    State.isDirty = true;
+    updateStats();
+    render();
 }
 
 async function insertSibling(addr, position) {
-    try {
-        /* Find parent address and index */
-        if (!addr) return;
-        const parts = addr.split('.');
-        const lastIdx = parseInt(parts[parts.length - 1], 10);
-        const parentAddr = parts.length > 1
-            ? parts.slice(0, -1).join('.') : '';
-        const insertIdx = position === 'before' ? lastIdx - 1 : lastIdx;
-        await API.addNode(parentAddr, '', insertIdx);
-        State.treeData = await API.getTree();
-        State.isDirty = true;
-        updateStats();
-        render();
-    } catch (err) {
-        console.error('Insert sibling failed:', err);
-    }
+    if (!addr) throw new Error('No address');
+    const parts = addr.split('.');
+    const lastIdx = parseInt(parts[parts.length - 1], 10);
+    const parentAddr = parts.length > 1
+        ? parts.slice(0, -1).join('.') : '';
+    const insertIdx = position === 'before' ? lastIdx - 1 : lastIdx;
+    await API.addNode(parentAddr, '', insertIdx);
+    State.treeData = await API.getTree();
+    State.isDirty = true;
+    updateStats();
+    render();
 }
 
 /* --- Drag Node / 拖拽节点 --- */
