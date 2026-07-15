@@ -13,6 +13,7 @@
 #include "json_handler.h"    /* JSON_HANDLER */
 #include "txt_handler.h"     /* TXT_HANDLER */
 #include "md_handler.h"      /* MD_HANDLER */
+#include "lxmm_handler.h"    /* LXMM_HANDLER — Phase 2 binary format */
 #include "i18n.h"            /* i18n_init, _() */
 #include "gui.h"             /* gui_run */
 
@@ -82,6 +83,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     if (!format_register(&MD_HANDLER)) {
         MessageBoxA(NULL,
                     "Failed to register MD format handler.",
+                    "Mind Map Tool - Fatal Error",
+                    MB_OK | MB_ICONERROR);
+        format_registry_shutdown();
+        return 1;
+    }
+
+    /* 注册 LXMM 格式处理器（支持 .lxmm 二进制思维导图文件）
+     * 注：Phase 2 新格式，用于存储含完整元数据的思维导图。       */
+    if (!format_register(&LXMM_HANDLER)) {
+        MessageBoxA(NULL,
+                    "Failed to register LXMM format handler.",
                     "Mind Map Tool - Fatal Error",
                     MB_OK | MB_ICONERROR);
         format_registry_shutdown();

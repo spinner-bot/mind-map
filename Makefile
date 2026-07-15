@@ -15,7 +15,7 @@
 # --- Compiler and flags 编译器与标志 ---
 CC       = gcc
 CFLAGS   = -Wall -Wextra -std=c11 -mwindows -I./include
-LDFLAGS  = -lcomctl32 -lcomdlg32 -lgdi32 -luser32 -lkernel32 -lshell32
+LDFLAGS  = -lcomctl32 -lcomdlg32 -lgdi32 -luser32 -lkernel32 -lshell32 -lshlwapi
 TARGET   = mind_map.exe
 
 # --- Directories 目录 ---
