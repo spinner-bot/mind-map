@@ -2,11 +2,19 @@
  * main.c - Application Entry Point
  * main.c - 应用程序入口点
  *
- * WinMain entry point for the Windows GUI application.
- * Initializes the format handler registry, registers all
- * built-in format handlers, and launches the GUI.
- * Windows GUI 应用程序的 WinMain 入口点。
- * 初始化格式处理器注册表，注册所有内置格式处理器，并启动 GUI。
+ * Phase 2: HTTP server mode (default). The C backend starts a
+ * lightweight HTTP server on localhost:8080, serves the web
+ * frontend, and provides a JSON API for all operations.
+ * Phase 1 Win32 GUI mode is preserved and can be toggled.
+ * 二期：HTTP 服务器模式（默认）。C 后端在 localhost:8080 启动
+ * 轻量级 HTTP 服务器，提供 Web 前端和 JSON API。
+ * 一期 Win32 GUI 模式保留，可通过命令行切换。
+ *
+ * Startup sequence 启动顺序:
+ *   1. Initialize format handler registry 初始化格式处理器注册表
+ *   2. Register all format handlers 注册所有格式处理器
+ *   3. Initialize and start HTTP server 初始化并启动 HTTP 服务器
+ *   4. Cleanup on exit 退出时清理
  * ============================================================ */
 
 #include "format_handler.h"  /* format_registry_init, format_register, etc. */
@@ -15,102 +23,117 @@
 #include "md_handler.h"      /* MD_HANDLER */
 #include "lxmm_handler.h"    /* LXMM_HANDLER — Phase 2 binary format */
 #include "i18n.h"            /* i18n_init, _() */
-#include "gui.h"             /* gui_run */
+#include "tree.h"            /* tree_create, tree_free */
+#include "server.h"          /* server_init, server_start, server_cleanup */
 
-#include <windows.h>         /* WinMain, HINSTANCE */
+#include <stdio.h>           /* printf, fprintf */
+#include <windows.h>         /* WinMain, HINSTANCE, AllocConsole */
 
-/* Application entry point for Windows GUI subsystem.
- * Windows GUI 子系统的应用程序入口点。
- *
- * The linker uses -mwindows flag to indicate this is a GUI app
- * (no console window). WinMain is the standard entry point
- * for such applications.
- * 链接器使用 -mwindows 标志表示这是一个 GUI 应用（无控制台窗口）。
- * WinMain 是此类应用的标准入口点。
- *
- * Startup sequence 启动顺序:
- *   1. Initialize the format handler registry 初始化格式处理器注册表
- *   2. Register JSON, TXT, MD format handlers 注册 JSON、TXT、MD 处理器
- *   3. Launch the GUI main loop 启动 GUI 主循环
- *   4. Cleanup on exit 退出时清理                                  */
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
-                   LPSTR lpCmdLine, int nCmdShow) {
-    /* 抑制未使用参数的编译器警告 */
-    (void)hPrevInstance;
-    (void)lpCmdLine;
+/* Phase 1 GUI entry point (preserved for compatibility).
+ * 一期 GUI 入口点（保留以兼容）。                                   */
+int gui_run(HINSTANCE hInstance, int nCmdShow);
 
-    /* --- Step 1: Initialize format handler registry ---
-     * 步骤 1：初始化格式处理器注册表                          */
+/* Application entry point. Console subsystem for server mode.
+ * 应用程序入口点。控制台子系统，服务器模式。                       */
+int main(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+
+    printf("Mind Map Tool v2.0 — Phase 2 Server Mode\n");
+    printf("思维导图工具 v2.0 — 二期服务器模式\n\n");
+
+    /* --- Step 1: Initialize format handler registry --- */
     if (!format_registry_init()) {
-        /* 注册表初始化失败 —— 这是一个致命错误。
-         * 在 GUI 应用中无法显示错误消息（因为窗口还没创建），
-         * 使用 MessageBoxA 进行早期错误报告。                   */
-        MessageBoxA(NULL,
-                    "Failed to initialize format handler registry.",
-                    "Mind Map Tool - Fatal Error",
-                    MB_OK | MB_ICONERROR);
-        return 1;  /* 非零退出码表示错误 */
+        fprintf(stderr, "FATAL: Failed to initialize format handler registry.\n");
+        system("pause");
+        return 1;
     }
+    printf("[OK] Format handler registry initialized\n");
 
-    /* --- Step 1.5: Initialize i18n (auto-detect system language) ---
-     * 步骤 1.5：初始化多语言支持（自动检测系统语言）              */
-    i18n_init();
-
-    /* --- Step 2: Register all built-in format handlers ---
-     * 步骤 2：注册所有内置格式处理器                          */
-
-    /* 注册 JSON 格式处理器（支持 .json 文件） */
+    /* --- Step 2: Register all format handlers --- */
     if (!format_register(&JSON_HANDLER)) {
-        MessageBoxA(NULL,
-                    "Failed to register JSON format handler.",
-                    "Mind Map Tool - Fatal Error",
-                    MB_OK | MB_ICONERROR);
+        fprintf(stderr, "FATAL: Failed to register JSON handler.\n");
         format_registry_shutdown();
+        system("pause");
         return 1;
     }
+    printf("[OK] Registered: JSON handler\n");
 
-    /* 注册 TXT 格式处理器（支持 .txt 编号大纲文件） */
     if (!format_register(&TXT_HANDLER)) {
-        MessageBoxA(NULL,
-                    "Failed to register TXT format handler.",
-                    "Mind Map Tool - Fatal Error",
-                    MB_OK | MB_ICONERROR);
+        fprintf(stderr, "FATAL: Failed to register TXT handler.\n");
         format_registry_shutdown();
+        system("pause");
         return 1;
     }
+    printf("[OK] Registered: TXT handler\n");
 
-    /* 注册 MD 格式处理器（支持 .md Markdown 文件） */
     if (!format_register(&MD_HANDLER)) {
-        MessageBoxA(NULL,
-                    "Failed to register MD format handler.",
-                    "Mind Map Tool - Fatal Error",
-                    MB_OK | MB_ICONERROR);
+        fprintf(stderr, "FATAL: Failed to register MD handler.\n");
         format_registry_shutdown();
+        system("pause");
         return 1;
     }
+    printf("[OK] Registered: MD handler\n");
 
-    /* 注册 LXMM 格式处理器（支持 .lxmm 二进制思维导图文件）
-     * 注：Phase 2 新格式，用于存储含完整元数据的思维导图。       */
     if (!format_register(&LXMM_HANDLER)) {
-        MessageBoxA(NULL,
-                    "Failed to register LXMM format handler.",
-                    "Mind Map Tool - Fatal Error",
-                    MB_OK | MB_ICONERROR);
+        fprintf(stderr, "FATAL: Failed to register LXMM handler.\n");
         format_registry_shutdown();
+        system("pause");
         return 1;
     }
+    printf("[OK] Registered: LXMM handler\n");
 
-    /* --- Step 3: Launch the GUI ---
-     * 步骤 3：启动 GUI                                        */
-    /* gui_run 包含主消息循环，直到用户关闭窗口后才返回。
-     * gui_run 的返回值是退出码。                              */
-    int exit_code = gui_run(hInstance, nCmdShow);
+    /* Check for --gui flag to launch Phase 1 GUI mode.
+     * 检查 --gui 标志启动一期 GUI 模式。                          */
+    {
+        int gui_mode = 0;
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "--gui") == 0) { gui_mode = 1; break; }
+        }
+        if (gui_mode) {
+            printf("\nLaunching Phase 1 GUI mode...\n");
+            i18n_init();
+            int exit_code = gui_run(GetModuleHandle(NULL), SW_SHOWDEFAULT);
+            format_registry_shutdown();
+            return exit_code;
+        }
+    }
 
-    /* --- Step 4: Cleanup ---
-     * 步骤 4：清理                                            */
-    /* 关闭注册表，释放所有内部资源 */
+    /* --- Step 3: Initialize and start HTTP server --- */
+    printf("\n--- Starting HTTP Server ---\n");
+    printf("Initializing server on http://localhost:%d ...\n", SERVER_PORT);
+
+    if (!server_init()) {
+        fprintf(stderr, "FATAL: Failed to initialize HTTP server.\n");
+        fprintf(stderr, "       Port %d may be in use. Close other instances.\n",
+                SERVER_PORT);
+        format_registry_shutdown();
+        system("pause");
+        return 1;
+    }
+    printf("[OK] Server socket created\n");
+
+    /* Create a default empty tree for the editor */
+    Tree* initial_tree = tree_create();
+    server_set_tree(initial_tree);
+    printf("[OK] Initial mind map tree created\n");
+
+    printf("\n========================================\n");
+    printf("  Opening browser...\n");
+    printf("  URL: http://localhost:%d\n", SERVER_PORT);
+    printf("  Press Ctrl+C or close this window\n");
+    printf("  to stop the server.\n");
+    printf("========================================\n\n");
+
+    /* Start the server (blocks until stopped) */
+    int exit_code = server_start();
+
+    /* --- Step 4: Cleanup --- */
+    printf("\nShutting down...\n");
+    tree_free(initial_tree);
+    server_cleanup();
     format_registry_shutdown();
+    printf("Goodbye!\n");
 
-    /* 返回退出码（0 表示正常退出） */
     return exit_code;
 }

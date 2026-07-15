@@ -31,7 +31,7 @@ mkdir -p obj
 CFLAGS="/nologo /utf-8 /c /Iinclude /Foobj/"
 
 # --- Common link libraries ---
-LIBS="ole32.lib comctl32.lib comdlg32.lib shell32.lib gdi32.lib user32.lib kernel32.lib shlwapi.lib"
+LIBS="ole32.lib comctl32.lib comdlg32.lib shell32.lib gdi32.lib user32.lib kernel32.lib shlwapi.lib ws2_32.lib"
 
 echo "============================================================"
 echo "  Building Mind Map Conversion Tool"
@@ -53,11 +53,12 @@ echo "[1/2] Compiling... 编译中..."
     src/converter.c \
     src/gui.c \
     src/i18n.c \
-    src/lxmm_handler.c 2>&1 | grep -E "error|warning|$" || true
+    src/lxmm_handler.c \
+    src/server.c 2>&1 | grep -E "error|warning|$" || true
 
 # Check if obj files exist
 OBJFILES=""
-for f in main tree utils encoding format_handler json_handler txt_handler md_handler converter gui i18n lxmm_handler; do
+for f in main tree utils encoding format_handler json_handler txt_handler md_handler converter gui i18n lxmm_handler server; do
     if [ ! -f "obj/${f}.obj" ]; then
         echo "[ERROR] Compilation failed: obj/${f}.obj not found"
         exit 1
@@ -68,7 +69,7 @@ done
 # --- Link ---
 echo ""
 echo "[2/2] Linking... 链接中..."
-"$LINK" /nologo /SUBSYSTEM:WINDOWS $OBJFILES $LIBS /OUT:mind_map.exe 2>&1
+"$LINK" /nologo /SUBSYSTEM:CONSOLE $OBJFILES $LIBS /OUT:mind_map.exe 2>&1
 
 # --- Done ---
 if [ -f "mind_map.exe" ]; then
