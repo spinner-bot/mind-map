@@ -185,6 +185,18 @@ function render() {
     }
 
     ctx.restore();
+
+    /* 如果 root 没有可见子节点，显示"创建初始节点"按钮 */
+    const root = State.treeData?.root;
+    const hasVisibleNodes = root && root.children && root.children.length > 0;
+    const btn = document.getElementById('btn-init-node');
+    if (btn) {
+        if (hasVisibleNodes) {
+            btn.classList.add('hidden');
+        } else {
+            btn.classList.remove('hidden');
+        }
+    }
 }
 
 /* --- Node Drawing / 节点绘制 --- */

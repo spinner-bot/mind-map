@@ -1207,6 +1207,11 @@ static void api_new_tree(const HttpRequest* req, SOCKET cli_sock) {
     (void)req;
     if (g_tree != NULL) tree_free(g_tree);
     g_tree = tree_create();
+    /* 新建时自动创建一个空子节点，用户可以直接开始编辑。
+     * Create an initial empty node so the user can start editing immediately. */
+    tree_node_add_child(g_tree->root, "");
+    tree_recalculate_depths(g_tree);
+    g_tree->total_nodes = tree_count_nodes(g_tree);
     char* json = tree_to_json(g_tree);
     send_json(HTTP_200_OK, json, cli_sock);
     free(json);

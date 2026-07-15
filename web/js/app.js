@@ -113,6 +113,19 @@ function wireToolbar() {
 
     $('btn-edit-content').onclick = onEditSelected;
     $('btn-add-child').onclick = onAddChildToSelected;
+
+    /* 空画布时"创建初始节点"按钮 */
+    $('btn-init-node').onclick = async () => {
+        try {
+            await API.addNode('', '', -1);
+            State.treeData = await API.getTree();
+            State.isDirty = true;
+            updateStats();
+            render();
+        } catch (err) {
+            showToast('Failed: ' + err.message);
+        }
+    };
 }
 
 /* --- Keyboard Shortcuts / 键盘快捷键 --- */
