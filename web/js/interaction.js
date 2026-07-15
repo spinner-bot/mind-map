@@ -108,15 +108,34 @@ function onMouseMove(e) {
         return;
     }
 
-    /* Hover detection 悬停检测 */
-    const hoverNode = hitTestNode(Mouse.x, Mouse.y);
-    if (hoverNode !== State.hoveredNode) {
-        State.hoveredNode = hoverNode;
-        canvas.style.cursor = hoverNode ? 'pointer' : 'grab';
-        render();  /* Redraw to show/hide hover buttons */
+    /* Hover detection 悬停检测。
+     * 关键：鼠标移到节点外围的悬停按钮上时，hitTestNode 返回 null（按钮在节点矩形外），
+     * 导致 hoveredNode 被清除、按钮消失、无法点击。
+     * 修复：如果当前有 hoveredNode，先检查鼠标是否仍在它的按钮区域内；
+     * 如果是，保持 hoveredNode 不变。                                 */
+    const hitNode = hitTestNode(Mouse.x, Mouse.y);
+    if (hitNode !== null) {
+        /* 鼠标在节点上 → 更新 hoveredNode */
+        if (hitNode !== State.hoveredNode) {
+            State.hoveredNode = hitNode;
+            canvas.style.cursor = 'pointer';
+            render();
+        }
+    } else if (State.hoveredNode != null) {
+        /* 鼠标不在任何节点上，但检查是否在 hoveredNode 的按钮区域内 */
+        const btnDir = hitTestHoverButton(Mouse.x, Mouse.y);
+        if (btnDir === null) {
+            /* 既不在节点上也不在按钮上 → 清除悬停 */
+            State.hoveredNode = null;
+            canvas.style.cursor = 'grab';
+            render();
+        }
+        /* 如果 btnDir 非 null → 鼠标在按钮上，保持 hoveredNode 不变 */
+    } else {
+        canvas.style.cursor = 'grab';
     }
 
-    /* Hover button cursor change 悬停按钮光标变化 */
+    /* 悬停按钮光标指示 */
     if (State.hoveredNode && !State.dragging) {
         const btnDir = hitTestHoverButton(Mouse.x, Mouse.y);
         canvas.style.cursor = btnDir ? 'pointer' : 'pointer';
