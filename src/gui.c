@@ -28,6 +28,7 @@
 #include <commctrl.h>        /* ListView, ProgressBar, ComboBoxEx */
 #include <commdlg.h>         /* GetOpenFileNameW */
 #include <shlobj.h>          /* SHBrowseForFolderW */
+#include <shellapi.h>        /* DragQueryFileW, DragAcceptFiles, DragFinish */
 #include <stdio.h>           /* snprintf, vsnprintf */
 #include <stdlib.h>          /* malloc, free */
 #include <string.h>          /* strlen, wcslen, strcpy */
@@ -824,6 +825,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
             gui_log(_(STR_LOG_FORMATS),
                      g_gui.output_handler_count);
 
+            /* Enable drag-and-drop file import.
+             * 启用拖放文件导入。                              */
+            DragAcceptFiles(hwnd, TRUE);
+
             /* Apply i18n to initial window title and UI strings.
              * 应用 i18n 到初始窗口标题和 UI 字符串。            */
             gui_refresh_ui();
@@ -910,6 +915,48 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
         {
             /* Handle ListView double-click (open file?)
              * For now, no special handling needed */
+            return 0;
+        }
+
+        case WM_DROPFILES:
+        {
+            /* Handle drag-and-drop file import.
+             * 处理拖放文件导入。                                */
+            HDROP hDrop = (HDROP)wParam;
+
+            /* Get number of dropped files 获取拖放的文件数量 */
+            UINT file_count = DragQueryFileW(hDrop, 0xFFFFFFFF, NULL, 0);
+
+            for (UINT i = 0; i < file_count; i++) {
+                /* Get file path length first 先获取路径长度 */
+                UINT path_len = DragQueryFileW(hDrop, i, NULL, 0);
+                if (path_len == 0) continue;
+
+                /* Allocate buffer and get the path 分配缓冲区获取路径 */
+                WCHAR* wpath = (WCHAR*)malloc((path_len + 1) * sizeof(WCHAR));
+                if (wpath == NULL) continue;
+
+                DragQueryFileW(hDrop, i, wpath, path_len + 1);
+
+                /* Convert to UTF-8 and add to list 转为 UTF-8 并添加到列表 */
+                char* utf8_path = wide_to_utf8(wpath);
+                if (utf8_path != NULL) {
+                    /* Only add if it's a supported file type
+                     * 仅添加支持的文件类型 */
+                    FormatHandler* h = format_find_by_extension(utf8_path);
+                    if (h != NULL) {
+                        gui_add_file(utf8_path);
+                    } else {
+                        gui_log("Skipped (unsupported format): %s",
+                                path_get_filename(utf8_path));
+                    }
+                    free(utf8_path);
+                }
+                free(wpath);
+            }
+
+            /* Release the drop handle 释放拖放句柄 */
+            DragFinish(hDrop);
             return 0;
         }
 
