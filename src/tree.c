@@ -22,7 +22,9 @@
 
 #include <stdlib.h>   /* malloc, free, realloc, NULL, size_t */
 #include <string.h>   /* strdup, strlen, strcpy, memmove */
-#include <stdio.h>    /* snprintf, sprintf */
+#include <stdio.h>    /* snprintf, sprintf, vsnprintf */
+#include <stdarg.h>   /* va_list, va_start, va_end */
+#include <stdint.h>   /* uint32_t */
 
 /* ================================================================
  * Internal helpers 内部辅助函数
@@ -96,6 +98,20 @@ Tree* tree_create(void) {
     tree->source_file   = NULL;
     tree->source_format = NULL;
 
+    /* 初始化二期文件级配置为默认值 */
+    tree->config.canvas_color    = 0xFFFFFFFF;  /* 白色背景 ARGB */
+    tree->config.default_width   = 0;           /* 自动宽度 */
+    tree->config.default_height  = 0;           /* 自动高度 */
+    tree->config.default_format  = FMT_PLAIN;   /* 纯文本 */
+    tree->config.default_zoom    = 1.0f;        /* 100% 缩放 */
+    /* 默认编码为 UTF-8 */
+    tree->config.default_encoding[0] = 'U';
+    tree->config.default_encoding[1] = 'T';
+    tree->config.default_encoding[2] = 'F';
+    tree->config.default_encoding[3] = '-';
+    tree->config.default_encoding[4] = '8';
+    tree->config.default_encoding[5] = '\0';
+
     return tree;
 }
 
@@ -144,6 +160,13 @@ TreeNode* tree_node_create(const char* content) {
     node->child_capacity  = 0;
     node->depth           = 0;     /* 加入树后由 tree_recalculate_depths() 更新 */
     node->has_branch_info = false; /* 同时有内容和子节点时设为 true */
+
+    /* 初始化二期 .lxmm 元数据字段为默认值 */
+    node->expanded        = true;           /* 默认展开 */
+    node->custom_color    = 0;              /* 0 = 自动配色 */
+    node->custom_width    = 0;              /* 0 = 自动宽度 */
+    node->custom_height   = 0;              /* 0 = 自动高度 */
+    node->format_type     = FMT_PLAIN;      /* 默认纯文本 */
 
     return node;
 }
@@ -951,4 +974,646 @@ int tree_count_nodes(const Tree* tree) {
 
     free(queue);
     return count;
+}
+
+/* ================================================================
+ * JSON Bridge Functions — Phase 2 frontend-backend communication
+ * JSON 桥接函数 — 二期前后端通信
+ * ================================================================ */
+
+/* 动态字符串缓冲区，用于构建 JSON 输出。
+ * 自动扩容，支持追加格式化字符串。                               */
+typedef struct {
+    char* data;      /* 缓冲区指针 */
+    int   len;       /* 当前已使用长度（不含 '\0'） */
+    int   cap;       /* 缓冲区总容量 */
+} JsonBuf;
+
+/* 初始化 JSON 缓冲区。初始容量 4KB，对大多数树足够。            */
+static void json_buf_init(JsonBuf* jb) {
+    jb->cap = 4096;
+    jb->data = (char*)safe_malloc(jb->cap);
+    jb->data[0] = '\0';
+    jb->len = 0;
+}
+
+/* 向 JSON 缓冲区追加格式化字符串。自动扩容。                    */
+static void json_buf_append(JsonBuf* jb, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    /* 先计算需要的长度 */
+    int needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+
+    if (needed <= 0) return;
+
+    /* 确保容量足够（+1 给 '\0'） */
+    while (jb->len + needed + 1 >= jb->cap) {
+        jb->cap *= 2;
+        jb->data = (char*)safe_realloc(jb->data, jb->cap);
+    }
+
+    va_start(args, fmt);
+    vsnprintf(jb->data + jb->len, jb->cap - jb->len, fmt, args);
+    va_end(args);
+    jb->len += needed;
+}
+
+/* 追加 JSON 转义后的字符串（包括引号包裹）。
+ * 对 "、\、\n、\r、\t 等字符进行转义。                          */
+static void json_buf_append_string(JsonBuf* jb, const char* str) {
+    if (str == NULL) {
+        json_buf_append(jb, "null");
+        return;
+    }
+    json_buf_append(jb, "\"");
+    for (const char* c = str; *c; c++) {
+        switch (*c) {
+            case '"':  json_buf_append(jb, "\\\""); break;
+            case '\\': json_buf_append(jb, "\\\\"); break;
+            case '\n': json_buf_append(jb, "\\n");  break;
+            case '\r': json_buf_append(jb, "\\r");  break;
+            case '\t': json_buf_append(jb, "\\t");  break;
+            default:   {
+                /* 确保容量足够单字符 + '\0' */
+                if (jb->len + 2 >= jb->cap) {
+                    jb->cap *= 2;
+                    jb->data = (char*)safe_realloc(jb->data, jb->cap);
+                }
+                jb->data[jb->len++] = *c;
+                jb->data[jb->len] = '\0';
+            }
+        }
+    }
+    json_buf_append(jb, "\"");
+}
+
+/* 递归将 TreeNode 序列化为 JSON 对象，写入缓冲区。
+ * 输出格式：
+ *   { "content": "...", "expanded": true, "custom_color": 0,
+ *     "custom_width": 0, "custom_height": 0, "format_type": 0,
+ *     "has_branch_info": false, "children": [...] }              */
+static void tree_node_to_json_buf(TreeNode* node, JsonBuf* jb) {
+    if (node == NULL) {
+        json_buf_append(jb, "null");
+        return;
+    }
+
+    json_buf_append(jb, "{");
+
+    /* content — 节点文本内容 */
+    json_buf_append(jb, "\"content\":");
+    json_buf_append_string(jb, node->content);
+    json_buf_append(jb, ",");
+
+    /* expanded — 展开/折叠状态 */
+    json_buf_append(jb, "\"expanded\":%s,", node->expanded ? "true" : "false");
+
+    /* custom_color — 自定义颜色 (0=自动) */
+    json_buf_append(jb, "\"custom_color\":%u,", node->custom_color);
+
+    /* custom_width — 自定义宽度 (0=自动) */
+    json_buf_append(jb, "\"custom_width\":%d,", node->custom_width);
+
+    /* custom_height — 自定义高度 (0=自动) */
+    json_buf_append(jb, "\"custom_height\":%d,", node->custom_height);
+
+    /* format_type — 内容格式 */
+    json_buf_append(jb, "\"format_type\":%d,", (int)node->format_type);
+
+    /* has_branch_info — 枝信息标志 */
+    json_buf_append(jb, "\"has_branch_info\":%s,", node->has_branch_info ? "true" : "false");
+
+    /* children — 递归序列化子节点数组 */
+    json_buf_append(jb, "\"children\":[");
+    for (int i = 0; i < node->child_count; i++) {
+        if (i > 0) json_buf_append(jb, ",");
+        tree_node_to_json_buf(node->children[i], jb);
+    }
+    json_buf_append(jb, "]");
+
+    json_buf_append(jb, "}");
+}
+
+/* 将 TreeConfig 序列化为 JSON 对象。                              */
+static void tree_config_to_json_buf(const TreeConfig* cfg, JsonBuf* jb) {
+    if (cfg == NULL) {
+        json_buf_append(jb, "null");
+        return;
+    }
+    json_buf_append(jb, "{");
+    json_buf_append(jb, "\"canvas_color\":%u,", cfg->canvas_color);
+    json_buf_append(jb, "\"default_width\":%d,", cfg->default_width);
+    json_buf_append(jb, "\"default_height\":%d,", cfg->default_height);
+    json_buf_append(jb, "\"default_format\":%d,", (int)cfg->default_format);
+    json_buf_append(jb, "\"default_zoom\":%g,", cfg->default_zoom);
+    json_buf_append(jb, "\"default_encoding\":");
+    json_buf_append_string(jb, cfg->default_encoding);
+    json_buf_append(jb, "}");
+}
+
+/* 公开 API：将整棵树（含配置和所有元数据）序列化为 JSON 字符串。  */
+char* tree_to_json(const Tree* tree) {
+    if (tree == NULL || tree->root == NULL) {
+        /* 空树：返回最小有效 JSON */
+        char* empty = (char*)safe_malloc(32);
+        snprintf(empty, 32, "{\"root\":null,\"config\":null}");
+        return empty;
+    }
+
+    JsonBuf jb;
+    json_buf_init(&jb);
+
+    json_buf_append(&jb, "{");
+
+    /* config 部分 */
+    json_buf_append(&jb, "\"config\":");
+    tree_config_to_json_buf(&tree->config, &jb);
+    json_buf_append(&jb, ",");
+
+    /* root 部分 */
+    json_buf_append(&jb, "\"root\":");
+    tree_node_to_json_buf(tree->root, &jb);
+
+    json_buf_append(&jb, "}");
+
+    /* 确保以 '\0' 结尾 */
+    if (jb.len + 1 >= jb.cap) {
+        jb.cap = jb.len + 1;
+        jb.data = (char*)safe_realloc(jb.data, jb.cap);
+    }
+    jb.data[jb.len] = '\0';
+
+    return jb.data;
+}
+
+/* ================================================================
+ * tree_from_json — JSON 字符串 → Tree
+ * ================================================================ */
+
+/* 简化的 JSON 解析器状态。
+ * 专为解析 tree_to_json 的输出格式设计。                         */
+typedef struct {
+    const char* json;  /* 输入的 JSON 字符串 */
+    int         pos;   /* 当前解析位置 */
+    int         len;   /* 字符串总长度 */
+} JsonReader;
+
+/* 跳过空白字符。                                                  */
+static void json_skip_ws(JsonReader* jr) {
+    while (jr->pos < jr->len) {
+        char c = jr->json[jr->pos];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            jr->pos++;
+        } else {
+            break;
+        }
+    }
+}
+
+/* 查看当前字符，不前进。                                          */
+static char json_peek(JsonReader* jr) {
+    if (jr->pos >= jr->len) return '\0';
+    return jr->json[jr->pos];
+}
+
+/* 前进一个字符并返回它。                                          */
+static char json_next(JsonReader* jr) {
+    if (jr->pos >= jr->len) return '\0';
+    return jr->json[jr->pos++];
+}
+
+/* 断言当前字符匹配期望值，匹配则跳过。                            */
+static bool json_expect(JsonReader* jr, char expected) {
+    json_skip_ws(jr);
+    if (json_peek(jr) == expected) {
+        json_next(jr);
+        return true;
+    }
+    return false;
+}
+
+/* 解析 JSON 字符串字面量（含引号）。结果存入 buf。
+ * 支持 \", \\, \n, \r, \t 转义。                                */
+static bool json_read_string(JsonReader* jr, char* buf, int buf_size) {
+    json_skip_ws(jr);
+    if (json_peek(jr) != '"') return false;
+    json_next(jr);  /* 跳过开始的 '"' */
+
+    int bi = 0;
+    while (jr->pos < jr->len && bi < buf_size - 1) {
+        char c = json_next(jr);
+        if (c == '"') {
+            /* 字符串结束 */
+            buf[bi] = '\0';
+            return true;
+        } else if (c == '\\') {
+            char esc = json_next(jr);
+            switch (esc) {
+                case '"':  buf[bi++] = '"';  break;
+                case '\\': buf[bi++] = '\\'; break;
+                case 'n':  buf[bi++] = '\n'; break;
+                case 'r':  buf[bi++] = '\r'; break;
+                case 't':  buf[bi++] = '\t'; break;
+                default:   buf[bi++] = esc;  break;
+            }
+        } else {
+            buf[bi++] = c;
+        }
+    }
+    buf[bi] = '\0';
+    return false;  /* 未闭合的字符串 */
+}
+
+/* 解析 JSON null 字面量。                                         */
+static bool json_read_null(JsonReader* jr) {
+    json_skip_ws(jr);
+    if (jr->pos + 3 < jr->len &&
+        jr->json[jr->pos] == 'n' &&
+        jr->json[jr->pos+1] == 'u' &&
+        jr->json[jr->pos+2] == 'l' &&
+        jr->json[jr->pos+3] == 'l') {
+        jr->pos += 4;
+        return true;
+    }
+    return false;
+}
+
+/* 解析 JSON 布尔值。                                              */
+static bool json_read_bool(JsonReader* jr, bool* out) {
+    json_skip_ws(jr);
+    if (jr->pos + 3 < jr->len &&
+        jr->json[jr->pos] == 't' &&
+        jr->json[jr->pos+1] == 'r' &&
+        jr->json[jr->pos+2] == 'u' &&
+        jr->json[jr->pos+3] == 'e') {
+        jr->pos += 4;
+        *out = true;
+        return true;
+    }
+    if (jr->pos + 4 < jr->len &&
+        jr->json[jr->pos] == 'f' &&
+        jr->json[jr->pos+1] == 'a' &&
+        jr->json[jr->pos+2] == 'l' &&
+        jr->json[jr->pos+3] == 's' &&
+        jr->json[jr->pos+4] == 'e') {
+        jr->pos += 5;
+        *out = false;
+        return true;
+    }
+    return false;
+}
+
+/* 解析 JSON 整数。                                                */
+static bool json_read_int(JsonReader* jr, int* out) {
+    json_skip_ws(jr);
+    char c = json_peek(jr);
+    /* 判断是否为数字或负号开头 */
+    if (!((c >= '0' && c <= '9') || c == '-')) return false;
+
+    int sign = 1;
+    if (c == '-') { sign = -1; json_next(jr); }
+
+    int val = 0;
+    while (jr->pos < jr->len) {
+        c = json_peek(jr);
+        if (c >= '0' && c <= '9') {
+            val = val * 10 + (c - '0');
+            json_next(jr);
+        } else {
+            break;
+        }
+    }
+    *out = sign * val;
+    return true;
+}
+
+/* 解析 JSON 无符号整数。                                          */
+static bool json_read_uint(JsonReader* jr, uint32_t* out) {
+    json_skip_ws(jr);
+    char c = json_peek(jr);
+    if (c < '0' || c > '9') return false;
+
+    uint32_t val = 0;
+    while (jr->pos < jr->len) {
+        c = json_peek(jr);
+        if (c >= '0' && c <= '9') {
+            val = val * 10 + (uint32_t)(c - '0');
+            json_next(jr);
+        } else {
+            break;
+        }
+    }
+    *out = val;
+    return true;
+}
+
+/* 前向声明递归解析函数。                                          */
+static TreeNode* json_parse_tree_node(JsonReader* jr, char* error_msg, int err_size);
+
+/* 解析 JSON 对象中的键名并验证是否匹配期望值。
+ * 对象形如 "key": value。调用者需确保当前位置在对象内部。        */
+static bool json_read_key(JsonReader* jr, const char* expected_key) {
+    char key_buf[64];
+    if (!json_read_string(jr, key_buf, sizeof(key_buf))) return false;
+    if (strcmp(key_buf, expected_key) != 0) return false;
+    if (!json_expect(jr, ':')) return false;
+    return true;
+}
+
+/* 解析 JSON 数组 [ ... ]，对每个元素调用回调创建子节点。
+ * 回调接收父节点指针，应创建子节点并返回新创建的子节点指针。    */
+static bool json_parse_children_array(JsonReader* jr, TreeNode* parent,
+                                       char* error_msg, int err_size) {
+    if (!json_expect(jr, '[')) {
+        if (error_msg) snprintf(error_msg, err_size, "Expected '[' for children array");
+        return false;
+    }
+
+    json_skip_ws(jr);
+    /* 空数组 */
+    if (json_peek(jr) == ']') {
+        json_next(jr);
+        return true;
+    }
+
+    /* 解析每个子节点 */
+    while (jr->pos < jr->len) {
+        json_skip_ws(jr);
+        if (json_peek(jr) == ']') {
+            json_next(jr);
+            return true;
+        }
+
+        /* 递归解析子节点 */
+        TreeNode* child = json_parse_tree_node(jr, error_msg, err_size);
+        if (child == NULL) return false;
+
+        /* 将子节点添加到父节点 */
+        /* child 目前是孤立的，需要加入到 parent 的 children 中 */
+        if (parent->child_count >= parent->child_capacity) {
+            int new_cap = (parent->child_capacity == 0)
+                           ? 4 : parent->child_capacity * 2;
+            parent->children = (TreeNode**)safe_realloc(
+                parent->children, new_cap * sizeof(TreeNode*));
+            for (int i = parent->child_count; i < new_cap; i++) {
+                parent->children[i] = NULL;
+            }
+            parent->child_capacity = new_cap;
+        }
+        child->parent = parent;
+        parent->children[parent->child_count] = child;
+        parent->child_count++;
+
+        /* 跳过可选的逗号 */
+        json_skip_ws(jr);
+        if (json_peek(jr) == ',') {
+            json_next(jr);
+        }
+    }
+
+    return true;
+}
+
+/* 递归解析单个 TreeNode 的 JSON 对象。
+ * 格式：{ "content": ..., "expanded": ..., "children": [...] }   */
+static TreeNode* json_parse_tree_node(JsonReader* jr, char* error_msg, int err_size) {
+    /* 检查是否为 null */
+    json_skip_ws(jr);
+    if (json_peek(jr) == 'n') {
+        if (json_read_null(jr)) return NULL;
+        if (error_msg) snprintf(error_msg, err_size, "Expected null or object");
+        return NULL;
+    }
+
+    if (!json_expect(jr, '{')) {
+        if (error_msg) snprintf(error_msg, err_size, "Expected '{' for node object");
+        return NULL;
+    }
+
+    /* 创建节点（content 稍后设置） */
+    TreeNode* node = tree_node_create(NULL);
+
+    /* 解析对象的键值对 */
+    json_skip_ws(jr);
+    while (jr->pos < jr->len && json_peek(jr) != '}') {
+        char key_buf[64];
+        if (!json_read_string(jr, key_buf, sizeof(key_buf))) {
+            if (error_msg) snprintf(error_msg, err_size, "Expected string key in node object");
+            tree_node_free_subtree(node);
+            return NULL;
+        }
+        if (!json_expect(jr, ':')) {
+            if (error_msg) snprintf(error_msg, err_size, "Expected ':' after key");
+            tree_node_free_subtree(node);
+            return NULL;
+        }
+
+        /* 根据键名解析对应的值 */
+        if (strcmp(key_buf, "content") == 0) {
+            json_skip_ws(jr);
+            if (json_peek(jr) == 'n') {
+                /* null content → 保持 NULL */
+                json_read_null(jr);
+            } else {
+                char content_buf[16384];
+                if (json_read_string(jr, content_buf, sizeof(content_buf))) {
+                    if (content_buf[0] != '\0') {
+                        tree_node_set_content(node, content_buf);
+                    }
+                }
+            }
+        } else if (strcmp(key_buf, "expanded") == 0) {
+            bool val;
+            if (json_read_bool(jr, &val)) node->expanded = val;
+        } else if (strcmp(key_buf, "custom_color") == 0) {
+            uint32_t val;
+            if (json_read_uint(jr, &val)) node->custom_color = val;
+        } else if (strcmp(key_buf, "custom_width") == 0) {
+            int val;
+            if (json_read_int(jr, &val)) node->custom_width = val;
+        } else if (strcmp(key_buf, "custom_height") == 0) {
+            int val;
+            if (json_read_int(jr, &val)) node->custom_height = val;
+        } else if (strcmp(key_buf, "format_type") == 0) {
+            int val;
+            if (json_read_int(jr, &val)) {
+                node->format_type = (NodeFormatType)val;
+            }
+        } else if (strcmp(key_buf, "has_branch_info") == 0) {
+            bool val;
+            if (json_read_bool(jr, &val)) node->has_branch_info = val;
+        } else if (strcmp(key_buf, "children") == 0) {
+            if (!json_parse_children_array(jr, node, error_msg, err_size)) {
+                tree_node_free_subtree(node);
+                return NULL;
+            }
+        }
+
+        /* 跳过逗号 */
+        json_skip_ws(jr);
+        if (json_peek(jr) == ',') {
+            json_next(jr);
+        }
+        json_skip_ws(jr);
+    }
+
+    if (!json_expect(jr, '}')) {
+        if (error_msg) snprintf(error_msg, err_size, "Expected '}' to close node object");
+        tree_node_free_subtree(node);
+        return NULL;
+    }
+
+    return node;
+}
+
+/* 从 JSON 对象中解析 TreeConfig。                                  */
+static bool json_parse_config(JsonReader* jr, TreeConfig* cfg) {
+    if (!json_expect(jr, '{')) return false;
+
+    json_skip_ws(jr);
+    while (jr->pos < jr->len && json_peek(jr) != '}') {
+        char key_buf[64];
+        if (!json_read_string(jr, key_buf, sizeof(key_buf))) return false;
+        if (!json_expect(jr, ':')) return false;
+
+        if (strcmp(key_buf, "canvas_color") == 0) {
+            uint32_t val; if (json_read_uint(jr, &val)) cfg->canvas_color = val;
+        } else if (strcmp(key_buf, "default_width") == 0) {
+            int val; if (json_read_int(jr, &val)) cfg->default_width = val;
+        } else if (strcmp(key_buf, "default_height") == 0) {
+            int val; if (json_read_int(jr, &val)) cfg->default_height = val;
+        } else if (strcmp(key_buf, "default_format") == 0) {
+            int val; if (json_read_int(jr, &val)) cfg->default_format = (NodeFormatType)val;
+        } else if (strcmp(key_buf, "default_zoom") == 0) {
+            /* 简单浮点解析：读整数/小数 */
+            json_skip_ws(jr);
+            float fval = 1.0f;
+            /* 此处需更完善的浮点解析，简化跳过 */
+            if (json_peek(jr) >= '0' && json_peek(jr) <= '9') {
+                int ival = 0;
+                json_read_int(jr, &ival);
+                fval = (float)ival;
+            }
+            cfg->default_zoom = fval;
+        } else if (strcmp(key_buf, "default_encoding") == 0) {
+            char enc_buf[32];
+            if (json_read_string(jr, enc_buf, sizeof(enc_buf))) {
+                strncpy(cfg->default_encoding, enc_buf, 31);
+                cfg->default_encoding[31] = '\0';
+            }
+        }
+
+        json_skip_ws(jr);
+        if (json_peek(jr) == ',') json_next(jr);
+        json_skip_ws(jr);
+    }
+
+    return json_expect(jr, '}');
+}
+
+/* 公开 API：将 JSON 字符串解析为 Tree。                            */
+Tree* tree_from_json(const char* json_str,
+                     char* error_msg, int err_size) {
+    if (json_str == NULL) {
+        if (error_msg && err_size > 0) {
+            snprintf(error_msg, err_size, "NULL JSON string");
+        }
+        return NULL;
+    }
+
+    if (error_msg && err_size > 0) error_msg[0] = '\0';
+
+    JsonReader jr;
+    jr.json = json_str;
+    jr.pos  = 0;
+    jr.len  = (int)strlen(json_str);
+
+    /* 解析顶层对象 { "config": { ... }, "root": { ... } } */
+    if (!json_expect(&jr, '{')) {
+        if (error_msg && err_size > 0) {
+            snprintf(error_msg, err_size, "Expected '{' at start of tree JSON");
+        }
+        return NULL;
+    }
+
+    /* 创建 Tree */
+    Tree* tree = tree_create();
+    if (tree == NULL) {
+        if (error_msg && err_size > 0) {
+            snprintf(error_msg, err_size, "Failed to create tree");
+        }
+        return NULL;
+    }
+
+    /* 解析两个顶层键: "config" 和 "root" */
+    json_skip_ws(&jr);
+    while (jr.pos < jr.len && json_peek(&jr) != '}') {
+        char key_buf[64];
+        if (!json_read_string(&jr, key_buf, sizeof(key_buf))) {
+            if (error_msg && err_size > 0) {
+                snprintf(error_msg, err_size, "Expected key in root object");
+            }
+            tree_free(tree);
+            return NULL;
+        }
+        if (!json_expect(&jr, ':')) {
+            if (error_msg && err_size > 0) {
+                snprintf(error_msg, err_size, "Expected ':' after key '%s'", key_buf);
+            }
+            tree_free(tree);
+            return NULL;
+        }
+
+        if (strcmp(key_buf, "config") == 0) {
+            json_skip_ws(&jr);
+            if (json_peek(&jr) == 'n') {
+                json_read_null(&jr);
+            } else {
+                if (!json_parse_config(&jr, &tree->config)) {
+                    if (error_msg && err_size > 0) {
+                        snprintf(error_msg, err_size, "Failed to parse config");
+                    }
+                    tree_free(tree);
+                    return NULL;
+                }
+            }
+        } else if (strcmp(key_buf, "root") == 0) {
+            json_skip_ws(&jr);
+            if (json_peek(&jr) == 'n') {
+                json_read_null(&jr);
+            } else {
+                /* 释放默认的 root，使用解析出的 root */
+                TreeNode* parsed_root = json_parse_tree_node(&jr, error_msg, err_size);
+                if (parsed_root == NULL) {
+                    tree_free(tree);
+                    return NULL;
+                }
+                /* 替换 tree 的 root */
+                tree_node_free_subtree(tree->root);
+                tree->root = parsed_root;
+                /* root 没有 parent */
+                parsed_root->parent = NULL;
+                parsed_root->depth = 0;
+            }
+        }
+
+        json_skip_ws(&jr);
+        if (json_peek(&jr) == ',') json_next(&jr);
+        json_skip_ws(&jr);
+    }
+
+    if (!json_expect(&jr, '}')) {
+        if (error_msg && err_size > 0) {
+            snprintf(error_msg, err_size, "Expected '}' at end of tree JSON");
+        }
+        tree_free(tree);
+        return NULL;
+    }
+
+    /* 重新计算元数据 */
+    tree_recalculate_depths(tree);
+    tree->total_nodes = tree_count_nodes(tree);
+
+    return tree;
 }

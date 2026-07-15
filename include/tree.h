@@ -20,6 +20,14 @@
  *   - The root node is a container: its content is typically NULL
  *     but may hold a document title.
  *     root 节点是容器：其 content 通常为 NULL，但可持有文档标题。
+ *
+ * Phase 2 additions 二期新增:
+ *   - Per-node metadata for .lxmm format (color, size, format type,
+ *     expanded state). .lxmm 格式的每节点元数据。
+ *   - TreeConfig for file-level settings (canvas color, defaults).
+ *     文件级配置（画布颜色、默认值）。
+ *   - JSON bridge functions for frontend-backend communication.
+ *     前后端通信的 JSON 桥接函数。
  * ============================================================ */
 
 #ifndef TREE_H
@@ -27,10 +35,53 @@
 
 #include <stdbool.h>   /* bool, true, false */
 #include <stddef.h>    /* size_t */
+#include <stdint.h>    /* uint32_t */
 
 /* ----------------------------------------------------------------
  * Data Structures 数据结构
  * ---------------------------------------------------------------- */
+
+/* NodeFormatType: Content format of a tree node.
+ * NodeFormatType: 树节点内容的格式类型。
+ * Used by .lxmm format to record whether content is plain text,
+ * LaTeX math, or HTML. LaTeX/HTML rendering reserved for future.
+ * 用于 .lxmm 格式记录内容是纯文本、LaTeX 公式还是 HTML。
+ * LaTeX/HTML 渲染预留后续实现。                                 */
+typedef enum {
+    FMT_PLAIN = 0,  /* Plain text 纯文本 */
+    FMT_LATEX = 1,  /* LaTeX math formula LaTeX 数学公式（预留） */
+    FMT_HTML  = 2   /* HTML formatted content HTML 格式内容（预留） */
+} NodeFormatType;
+
+/* TreeConfig: File-level configuration stored in .lxmm files.
+ * TreeConfig: 存储在 .lxmm 文件中的文件级配置。
+ * These settings control the default appearance and behavior
+ * of the mind map editor for a given file.
+ * 这些设置控制给定文件的思维导图编辑器的默认外观和行为。       */
+typedef struct {
+    /* Canvas background color in ARGB format (e.g., 0xFFFFFFFF = white).
+     * 画布背景颜色，ARGB 格式（如 0xFFFFFFFF = 白色）。         */
+    uint32_t canvas_color;
+
+    /* Default node width in characters (0 = auto-fit to content).
+     * 默认节点宽度（字符数，0 = 自动适配内容）。                */
+    int      default_width;
+
+    /* Default node height in characters (0 = auto-fit to content).
+     * 默认节点高度（字符数，0 = 自动适配内容）。                */
+    int      default_height;
+
+    /* Default content format for new nodes.
+     * 新节点的默认内容格式。                                    */
+    NodeFormatType default_format;
+
+    /* Default text encoding name (e.g., "UTF-8", "GBK").
+     * 默认文本编码名称（如 "UTF-8"、"GBK"）。                  */
+    char     default_encoding[32];
+
+    /* Default zoom level (1.0 = 100%). 默认缩放级别。          */
+    float    default_zoom;
+} TreeConfig;
 
 /* TreeNode: A single node in the intermediate tree representation.
  * TreeNode: 中间树表示中的单个节点。
@@ -79,6 +130,32 @@ typedef struct TreeNode {
      * 当节点同时有非 NULL 的 content 和至少一个子节点时为 TRUE。
      * 在解析时设置；序列化器用它判断是否需要枝信息丢失警告。  */
     bool    has_branch_info;
+
+    /* --- Phase 2 fields for .lxmm format 二期 .lxmm 格式字段 --- */
+
+    /* TRUE = node is expanded (showing children in the editor).
+     * FALSE = collapsed (children hidden). Default: TRUE.
+     * TRUE = 节点展开（在编辑器中显示子节点）。
+     * FALSE = 折叠（子节点隐藏）。默认：TRUE。                 */
+    bool    expanded;
+
+    /* Custom color for this node in ARGB format.
+     * 0 means "use auto-color by depth". Non-zero = ARGB color.
+     * 此节点的自定义颜色，ARGB 格式。
+     * 0 表示"按深度自动配色"。非零 = ARGB 颜色。               */
+    uint32_t custom_color;
+
+    /* Custom width in characters. 0 = auto-fit to content.
+     * 自定义宽度（字符数）。0 = 自动适配内容。                 */
+    int     custom_width;
+
+    /* Custom height in characters. 0 = auto-fit to content.
+     * 自定义高度（字符数）。0 = 自动适配内容。                 */
+    int     custom_height;
+
+    /* Content format type (plain text, LaTeX, or HTML).
+     * 内容格式类型（纯文本、LaTeX 或 HTML）。                  */
+    NodeFormatType format_type;
 } TreeNode;
 
 /* Tree: Container holding the entire tree plus metadata.
@@ -102,6 +179,11 @@ typedef struct Tree {
      * or NULL. 来源格式名称（如 "json"、"txt"、"md"），
      * 或为 NULL。                                          */
     char*     source_format;
+
+    /* File-level configuration (canvas color, defaults, etc.).
+     * Used by .lxmm format and the editor. 文件级配置
+     *（画布颜色、默认值等）。用于 .lxmm 格式和编辑器。       */
+    TreeConfig config;
 } Tree;
 
 /* ----------------------------------------------------------------
@@ -267,5 +349,47 @@ char* tree_export_dot(const Tree* tree);
 /* Count total nodes in a tree (recalculates total_nodes).
  * 统计树中的节点总数（重新计算 total_nodes）。                     */
 int tree_count_nodes(const Tree* tree);
+
+/* ================================================================
+ * JSON Bridge Functions (Phase 2 — frontend-backend communication)
+ * JSON 桥接函数（二期 — 前后端通信）
+ * ================================================================ */
+
+/* Serialize the entire Tree (including all Phase 2 metadata) to
+ * a JSON string for transmission to the web frontend.
+ * 将整棵树（包括所有二期元数据）序列化为 JSON 字符串，
+ * 用于传输给 Web 前端。
+ *
+ * The JSON structure mirrors the tree:
+ *   { "config": { "canvas_color": 4294967295, ... },
+ *     "root": { "content": null, "expanded": true,
+ *               "children": [ ... ] } }
+ *
+ * Each node includes: content, expanded, custom_color,
+ * custom_width, custom_height, format_type, has_branch_info,
+ * and children (recursive).
+ * 每个节点包含：content、expanded、custom_color、
+ * custom_width、custom_height、format_type、has_branch_info
+ * 和 children（递归）。
+ *
+ * Returns: heap-allocated JSON string (caller must free()).
+ * 返回值：堆分配的 JSON 字符串（调用者必须 free()）。              */
+char* tree_to_json(const Tree* tree);
+
+/* Parse a JSON string (produced by tree_to_json) back into a Tree.
+ * 将 JSON 字符串（由 tree_to_json 生成）解析回 Tree。
+ * This rebuilds the full tree including all metadata fields.
+ * 这将重建完整的树，包括所有元数据字段。
+ *
+ * Parameters 参数:
+ *   json_str - JSON string to parse 要解析的 JSON 字符串
+ *   error_msg - If non-NULL and parse fails, receives error message
+ *               如果非 NULL 且解析失败，接收错误消息
+ *   err_size  - Size of error_msg buffer error_msg 缓冲区大小
+ *
+ * Returns: newly allocated Tree on success, NULL on error.
+ * 返回值：成功返回新分配的 Tree，错误返回 NULL。                  */
+Tree* tree_from_json(const char* json_str,
+                     char* error_msg, int err_size);
 
 #endif /* TREE_H */
