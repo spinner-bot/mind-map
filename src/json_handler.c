@@ -841,6 +841,115 @@ HandlerStatus json_parse(const char* filepath, struct Tree* tree,
     return status;
 }
 
+/* ================================================================
+ * JSON Serialization Helpers (file scope)
+ * JSON 序列化辅助函数（文件作用域）
+ *
+ * MSVC C does not support nested functions, so these are defined
+ * at file scope and take all state through the context pointer.
+ * MSVC C 不支持嵌套函数，因此这些在文件作用域定义，
+ * 所有状态通过上下文指针传递。                                   */
+
+/* Serialization context: carries buffer state and options through
+ * recursive calls. 序列化上下文：在递归调用间传递缓冲区状态和选项。*/
+typedef struct {
+    char*          buf;
+    int            buf_len;
+    int            buf_cap;
+    JsonIndexMode  idx_mode;
+    int            indent;
+} JsonSerCtx;
+
+/* Append a single character, auto-growing the buffer.
+ * 追加单个字符，自动扩容缓冲区。                                */
+#define CTX_APPEND_CHAR(ctx, ch) do { \
+    if ((ctx)->buf_len + 1 >= (ctx)->buf_cap) { \
+        (ctx)->buf_cap *= 2; \
+        (ctx)->buf = (char*)mem_realloc((ctx)->buf, (ctx)->buf_cap); \
+    } \
+    (ctx)->buf[(ctx)->buf_len++] = (ch); \
+} while(0)
+
+/* Append an escaped JSON string to the buffer.
+ * 向缓冲区追加转义后的 JSON 字符串。                              */
+static void ctx_append_escaped(JsonSerCtx* ctx, const char* str) {
+    if (str == NULL) return;
+    for (const char* c = str; *c; c++) {
+        switch (*c) {
+            case '"':  CTX_APPEND_CHAR(ctx, '\\'); CTX_APPEND_CHAR(ctx, '"');  break;
+            case '\\': CTX_APPEND_CHAR(ctx, '\\'); CTX_APPEND_CHAR(ctx, '\\'); break;
+            case '\n': CTX_APPEND_CHAR(ctx, '\\'); CTX_APPEND_CHAR(ctx, 'n');  break;
+            case '\r': CTX_APPEND_CHAR(ctx, '\\'); CTX_APPEND_CHAR(ctx, 'r');  break;
+            case '\t': CTX_APPEND_CHAR(ctx, '\\'); CTX_APPEND_CHAR(ctx, 't');  break;
+            default:   CTX_APPEND_CHAR(ctx, *c); break;
+        }
+    }
+}
+
+/* Append indentation: newline + 2 spaces per indent level.
+ * 追加缩进：换行 + 每级2空格。                                   */
+static void ctx_append_indent(JsonSerCtx* ctx) {
+    CTX_APPEND_CHAR(ctx, '\n');
+    for (int i = 0; i < ctx->indent; i++) {
+        CTX_APPEND_CHAR(ctx, ' ');
+        CTX_APPEND_CHAR(ctx, ' ');
+    }
+}
+
+/* Recursively serialize a TreeNode to JSON.
+ * 递归将 TreeNode 序列化为 JSON。
+ *
+ * - Leaf node (no children) → "content_string"
+ * - INDEX0_BRANCH mode:           ["content", child1, child2, ...]
+ * - INDEX0_SIBLING mode:          [child1, child2, ...]              */
+static void serialize_node_json(JsonSerCtx* ctx, TreeNode* node) {
+    if (node == NULL) {
+        ctx_append_escaped(ctx, "null");
+        return;
+    }
+
+    if (node->child_count == 0) {
+        /* Leaf node: output as JSON string 叶子节点：输出 JSON 字符串 */
+        CTX_APPEND_CHAR(ctx, '"');
+        if (node->content != NULL) {
+            ctx_append_escaped(ctx, node->content);
+        }
+        CTX_APPEND_CHAR(ctx, '"');
+    } else {
+        /* Non-leaf node: output as JSON array [ ... ]
+         * 非叶子节点：输出为 JSON 数组 [ ... ]                  */
+        CTX_APPEND_CHAR(ctx, '[');
+        ctx->indent++;
+
+        bool need_comma = false;
+
+        /* INDEX0_BRANCH: index 0 = node's own content */
+        if (ctx->idx_mode == INDEX0_BRANCH) {
+            ctx_append_indent(ctx);
+            CTX_APPEND_CHAR(ctx, '"');
+            if (node->content != NULL) {
+                ctx_append_escaped(ctx, node->content);
+            }
+            CTX_APPEND_CHAR(ctx, '"');
+            need_comma = true;
+        }
+
+        /* Recursively serialize all children 递归序列化所有子节点 */
+        for (int i = 0; i < node->child_count; i++) {
+            if (need_comma) {
+                CTX_APPEND_CHAR(ctx, ',');
+            }
+            need_comma = true;
+            ctx_append_indent(ctx);
+            serialize_node_json(ctx, node->children[i]);
+        }
+
+        ctx->indent--;
+        ctx_append_indent(ctx);
+        CTX_APPEND_CHAR(ctx, ']');
+    }
+}
+
 /* 将 Tree 序列化为 JSON 文件。
  *
  * 序列化流程:
@@ -912,147 +1021,43 @@ HandlerStatus json_serialize(const char* filepath,
         }
     }
 
-    /* 构建 JSON 输出字符串。
-     * 使用递归辅助函数生成 JSON。
-     * 由于 C 没有内置的字符串构建器，我们使用一个可增长的缓冲区。 */
+    /* 使用递归序列化器生成 JSON。
+     * 序列化上下文和辅助函数定义在文件顶部（文件作用域）。
+     * 这里初始化并调用。                                          */
 
-    /* 预估缓冲区大小：每个节点约 50 字节（内容 + 引号 + 逗号 + 括号）*/
+    /* 预估缓冲区大小：每个节点约 60 字节 */
     int buf_cap = tree->total_nodes * 60 + 256;
-    int buf_len = 0;
     char* json_buf = (char*)mem_alloc(buf_cap);
 
-    /* 辅助宏：向缓冲区追加字符 */
-    #define APPEND_CHAR(ch) do { \
-        if (buf_len + 1 >= buf_cap) { \
-            buf_cap *= 2; \
-            json_buf = (char*)mem_realloc(json_buf, buf_cap); \
-        } \
-        json_buf[buf_len++] = (ch); \
-    } while(0)
+    /* 初始化序列化上下文并开始生成 JSON                         */
+    JsonSerCtx ctx;
+    ctx.buf      = json_buf;
+    ctx.buf_len  = 0;
+    ctx.buf_cap  = buf_cap;
+    ctx.idx_mode = idx_mode;
+    ctx.indent   = 0;
 
-    #define APPEND_STR(s) do { \
-        const char* _s = (s); \
-        int _len = (int)strlen(_s); \
-        while (buf_len + _len + 1 >= buf_cap) { \
-            buf_cap *= 2; \
-            json_buf = (char*)mem_realloc(json_buf, buf_cap); \
-        } \
-        memcpy(json_buf + buf_len, _s, _len); \
-        buf_len += _len; \
-    } while(0)
-
-    /* 递归辅助函数：将节点序列化为 JSON 数组字符串 */
-    /* 使用结构体来传递上下文（因为 C 没有闭包） */
-    /* 改为手动实现递归逻辑并内联处理 */
-
-    /* --- 开始生成 JSON --- */
-    APPEND_CHAR('[');
-    APPEND_CHAR('\n');
-
-    /* 处理 root 的直接子节点 */
-    bool first_item = true;
+    /* 序列化 root 的子节点为顶层 JSON 数组                      */
+    CTX_APPEND_CHAR(&ctx, '[');
+    ctx.indent++;
 
     for (int i = 0; i < tree->root->child_count; i++) {
-        TreeNode* child = tree->root->children[i];
-
-        if (!first_item) {
-            APPEND_STR(",\n");
+        if (i > 0) {
+            CTX_APPEND_CHAR(&ctx, ',');
         }
-        first_item = false;
-
-        /* 缩进（2空格） */
-        APPEND_STR("  ");
-
-        /* 序列化当前节点及其子树 */
-        /* 如果节点是叶子节点（无子节点）：直接输出内容 */
-        if (child->child_count == 0) {
-            /* 叶子节点："content" */
-            APPEND_CHAR('"');
-            if (child->content != NULL) {
-                /* 对内容中的特殊字符进行转义 */
-                for (const char* c = child->content; *c; c++) {
-                    switch (*c) {
-                        case '"':  APPEND_STR("\\\""); break;
-                        case '\\': APPEND_STR("\\\\"); break;
-                        case '\n': APPEND_STR("\\n");  break;
-                        case '\r': APPEND_STR("\\r");  break;
-                        case '\t': APPEND_STR("\\t");  break;
-                        default:   APPEND_CHAR(*c);     break;
-                    }
-                }
-            }
-            APPEND_CHAR('"');
-        } else {
-            /* 非叶子节点：["content", child1, child2, ...] */
-            APPEND_CHAR('[');
-
-            /* 枝信息模式：索引0 = 节点内容 */
-            if (idx_mode == INDEX0_BRANCH) {
-                APPEND_CHAR('"');
-                if (child->content != NULL) {
-                    for (const char* c = child->content; *c; c++) {
-                        switch (*c) {
-                            case '"':  APPEND_STR("\\\""); break;
-                            case '\\': APPEND_STR("\\\\"); break;
-                            case '\n': APPEND_STR("\\n");  break;
-                            case '\r': APPEND_STR("\\r");  break;
-                            case '\t': APPEND_STR("\\t");  break;
-                            default:   APPEND_CHAR(*c);     break;
-                        }
-                    }
-                }
-                APPEND_CHAR('"');
-            }
-
-            /* 序列化子节点（递归调用自身） */
-            /* 由于这里需要递归，但我们内联了代码……
-             * 实际上这是一个简化实现：对于深层嵌套，
-             * 我们将使用迭代而不是真正的递归。                   */
-
-            /* 使用辅助结构来模拟递归 */
-            /* 简化：直接输出子节点 */
-            for (int j = 0; j < child->child_count; j++) {
-                if (idx_mode == INDEX0_BRANCH || j > 0 ||
-                    (idx_mode == INDEX0_SIBLING && j == 0)) {
-                    /* 枝信息模式：子节点从索引1开始，所以总是在 ',' 后面 */
-                    /* 并列模式：所有子节点之间都需要 ',' */
-                    /* 但如果是枝信息模式且 j==0，已经在上面输出了索引0 */
-                    if (idx_mode == INDEX0_BRANCH) {
-                        /* 索引0已输出，这里从索引1开始 */
-                        APPEND_STR(", ");
-                    } else if (j > 0) {
-                        APPEND_STR(", ");
-                    }
-                }
-
-                TreeNode* grandchild = child->children[j];
-                /* 简化输出：grandchild 的内容 */
-                APPEND_CHAR('"');
-                if (grandchild->content != NULL) {
-                    for (const char* c = grandchild->content; *c; c++) {
-                        switch (*c) {
-                            case '"':  APPEND_STR("\\\""); break;
-                            case '\\': APPEND_STR("\\\\"); break;
-                            case '\n': APPEND_STR("\\n");  break;
-                            case '\r': APPEND_STR("\\r");  break;
-                            case '\t': APPEND_STR("\\t");  break;
-                            default:   APPEND_CHAR(*c);     break;
-                        }
-                    }
-                }
-                APPEND_CHAR('"');
-            }
-
-            APPEND_CHAR(']');
-        }
+        ctx_append_indent(&ctx);
+        serialize_node_json(&ctx, tree->root->children[i]);
     }
 
-    APPEND_CHAR('\n');
-    APPEND_CHAR(']');
-    APPEND_CHAR('\0');
+    ctx.indent--;
+    ctx_append_indent(&ctx);
+    CTX_APPEND_CHAR(&ctx, ']');
+    CTX_APPEND_CHAR(&ctx, '\n');
+    CTX_APPEND_CHAR(&ctx, '\0');
 
-    /* 计算有意义的长度（不含终止符） */
-    int final_len = buf_len - 1;  /* 去掉我们加的 '\0'，实际字符串到此为止 */
+    /* 从上下文恢复缓冲区状态                                     */
+    json_buf = ctx.buf;
+    int final_len = ctx.buf_len - 1;  /* 去掉结尾的 '\0' */
 
     /* 写入文件（UTF-8 with BOM） */
     /* 临时将 json_buf 截断为正确长度 */
@@ -1067,9 +1072,6 @@ HandlerStatus json_serialize(const char* filepath,
             RESULT_ERROR_FILE_WRITE,
             "Could not write JSON file: %s", filepath);
     }
-
-    #undef APPEND_CHAR
-    #undef APPEND_STR
 
     return status;
 }
