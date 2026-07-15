@@ -198,14 +198,41 @@ function updateStats() {
     $('status-chars').textContent = `${totalChars} ${I18N.t('status.chars')}`;
 }
 
+/* --- Toast Notification / 提示通知 --- */
+function showToast(msg, duration) {
+    duration = duration || 2000;
+    /* 移除已有 toast */
+    const existing = document.querySelector('.mindmap-toast');
+    if (existing) existing.remove();
+    /* 创建新 toast */
+    const toast = document.createElement('div');
+    toast.className = 'mindmap-toast';
+    toast.textContent = msg;
+    toast.style.cssText = 'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);'
+        + 'background:#2c3e50;color:#fff;padding:10px 24px;border-radius:20px;'
+        + 'font-size:14px;z-index:9999;opacity:0;transition:opacity 0.3s;pointer-events:none;';
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => { toast.style.opacity = '1'; });
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
 /* --- Toolbar Actions / 工具栏操作 --- */
 async function onNewFile() {
-    State.treeData = await API.newTree();
-    State.selectedAddr = null;
-    State.currentFile = null;
-    State.isDirty = false;
-    updateStats();
-    render();
+    try {
+        State.treeData = await API.newTree();
+        State.selectedAddr = null;
+        State.currentFile = null;
+        State.isDirty = false;
+        updateStats();
+        render();
+        showToast('New mind map created / 已创建新思维导图');
+    } catch (err) {
+        console.error('New failed:', err);
+        showToast('Failed: ' + err.message);
+    }
 }
 
 async function onOpenFile() {
@@ -233,20 +260,23 @@ async function onOpenFile() {
 }
 
 async function onSaveFile() {
-    if (!State.treeData) return;
+    if (!State.treeData) {
+        showToast('Nothing to save / 没有可保存的内容');
+        return;
+    }
     try {
         const fname = State.currentFile || 'untitled.lxmm';
         await API.saveFile(fname, State.treeData);
         State.isDirty = false;
-        console.log('Saved:', fname);
+        showToast('Saved: ' + fname + ' / 已保存');
     } catch (err) {
         console.error('Save failed:', err);
-        alert('Failed to save: ' + err.message);
+        showToast('Save failed: ' + err.message);
     }
 }
 
-function onUndo() { /* Placeholder — implemented in task 8 */ }
-function onRedo() { /* Placeholder — implemented in task 8 */ }
+function onUndo() { UndoManager.undo(); showToast('Undo / 撤销'); }
+function onRedo() { UndoManager.redo(); showToast('Redo / 重做'); }
 
 function adjustZoom(delta) {
     State.viewport.zoom = Math.max(0.1, Math.min(5.0, State.viewport.zoom + delta));
@@ -261,8 +291,41 @@ function updateZoomLabel() {
         Math.round(State.viewport.zoom * 100) + '%';
 }
 
-async function onExport() { /* Placeholder — implemented in task 10 */ }
-async function onConfig() { /* Placeholder — implemented in task 11 */ }
+async function onExport() {
+    /* 导出为 PNG 图片 */
+    try {
+        const canvas = getCanvas();
+        canvas.toBlob(async (blob) => {
+            if (!blob) { showToast('Export failed / 导出失败'); return; }
+            /* 触发浏览器下载 */
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'mindmap.png'; a.click();
+            URL.revokeObjectURL(url);
+            showToast('Exported: mindmap.png / 已导出');
+        }, 'image/png');
+    } catch (err) {
+        showToast('Export failed: ' + err.message);
+    }
+}
+
+function onConfig() {
+    /* 打开画布设置对话框 */
+    const c = State.treeData?.config;
+    if (!c) { showToast('No config / 无配置'); return; }
+    const bg = prompt('Canvas color (ARGB, e.g. 4294967295=white):', c.canvas_color || 4294967295);
+    if (bg === null) return;
+    const dw = prompt('Default node width (chars, 0=auto):', c.default_width || 0);
+    if (dw === null) return;
+    const dh = prompt('Default node height (chars, 0=auto):', c.default_height || 0);
+    if (dh === null) return;
+    c.canvas_color = parseInt(bg) || 4294967295;
+    c.default_width = parseInt(dw) || 0;
+    c.default_height = parseInt(dh) || 0;
+    State.isDirty = true;
+    render();
+    showToast('Config updated / 配置已更新');
+}
 
 async function onEditSelected() {
     if (!State.selectedAddr) return;
