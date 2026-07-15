@@ -39,6 +39,10 @@ int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
 
+    /* 设置控制台输出编码为 UTF-8，避免中文乱码。
+     * Set console output code page to UTF-8 to prevent garbled text. */
+    SetConsoleOutputCP(CP_UTF8);
+
     printf("Mind Map Tool v2.0 — Phase 2 Server Mode\n");
     printf("思维导图工具 v2.0 — 二期服务器模式\n\n");
 
