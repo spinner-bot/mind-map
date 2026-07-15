@@ -209,20 +209,15 @@ async function onNewFile() {
 }
 
 async function onOpenFile() {
-    /* Create temporary file input */
     const input = document.getElementById('file-input');
     input.onchange = async () => {
         const file = input.files[0];
         if (!file) return;
         try {
-            /* For browser security, we pass the path to the backend.
-             * Since this is localhost, we can use a workaround:
-             * upload the file to the backend via POST body. */
+            /* 浏览器安全限制：无法获取文件完整路径，只能拿到文件名和内容。
+             * 因此直接传文件内容给后端，由后端写临时文件再解析。       */
             const text = await file.text();
-            /* Use import API: send file content to backend */
-            /* For now, use the file path if available */
-            State.treeData = await API.importFile(file.name);
-            /* Or create a new temp file on the server */
+            State.treeData = await API.importContent(file.name, text);
             State.currentFile = null;
             State.selectedAddr = null;
             State.isDirty = true;

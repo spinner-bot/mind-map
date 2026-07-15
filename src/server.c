@@ -638,6 +638,79 @@ static void api_file_import(const HttpRequest* req, SOCKET cli_sock) {
     free(json);
 }
 
+/* POST /api/file/import-content — 导入文件内容（浏览器安全限制下
+ * 无法获取完整文件路径，前端直接传文件内容和文件名）。
+ * Body: { "filename": "test.json", "content": "...file text..." } */
+static void api_file_import_content(const HttpRequest* req, SOCKET cli_sock) {
+    char filename[256];
+    char content[1048576];  /* Max 1MB file content 最大 1MB 文件内容 */
+    if (!json_extract_string(req->body, "filename", filename, sizeof(filename))) {
+        send_json_error(HTTP_400_BAD, "Missing 'filename' field", cli_sock);
+        return;
+    }
+    if (!json_extract_string(req->body, "content", content, sizeof(content))) {
+        send_json_error(HTTP_400_BAD, "Missing 'content' field", cli_sock);
+        return;
+    }
+
+    /* 根据文件名扩展名检测格式 */
+    FormatHandler* handler = format_find_by_extension(filename);
+    if (handler == NULL) {
+        send_json_error(HTTP_400_BAD, "Unsupported file format (unknown extension)", cli_sock);
+        return;
+    }
+
+    /* 写临时文件供 handler->parse 使用（handler 的 parse 接口需要文件路径）。
+     * 使用项目目录下的 _temp_import 文件。                           */
+    char temp_path[1024];
+    snprintf(temp_path, sizeof(temp_path), "%s/../_temp_import%s",
+             g_base_dir, handler->extension);
+
+    /* 写入临时文件（Unicode 安全） */
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, temp_path, -1, NULL, 0);
+    if (wlen > 0) {
+        WCHAR* wpath = (WCHAR*)malloc(wlen * sizeof(WCHAR));
+        if (wpath != NULL) {
+            MultiByteToWideChar(CP_UTF8, 0, temp_path, -1, wpath, wlen);
+            FILE* fp = _wfopen(wpath, L"wb");
+            free(wpath);
+            if (fp != NULL) {
+                fwrite(content, 1, strlen(content), fp);
+                fclose(fp);
+            }
+        }
+    }
+#else
+    FILE* fp = fopen(temp_path, "wb");
+    if (fp != NULL) { fwrite(content, 1, strlen(content), fp); fclose(fp); }
+#endif
+
+    /* 解析临时文件 */
+    Tree* new_tree = tree_create();
+    HandlerStatus status = handler->parse(temp_path, new_tree, NULL, NULL, NULL);
+
+    /* 删除临时文件 */
+    remove(temp_path);
+
+    if (status.result_code < 0) {
+        char err[512];
+        snprintf(err, sizeof(err), "Import error: %s",
+                 handler_result_to_string(status.result_code));
+        tree_free(new_tree);
+        send_json_error(HTTP_500_ERROR, err, cli_sock);
+        return;
+    }
+
+    /* 替换当前树 */
+    if (g_tree != NULL) tree_free(g_tree);
+    g_tree = new_tree;
+
+    char* json = tree_to_json(g_tree);
+    send_json(HTTP_200_OK, json, cli_sock);
+    free(json);
+}
+
 /* POST /api/file/export — 导出当前树为指定格式。
  * Body: { "path": "out.json", "format": "json" }                  */
 static void api_file_export(const HttpRequest* req, SOCKET cli_sock) {
@@ -1187,6 +1260,7 @@ static const Route g_routes[] = {
     { "POST", "/api/file/open",      api_file_open      },
     { "POST", "/api/file/save",      api_file_save      },
     { "POST", "/api/file/import",    api_file_import    },
+    { "POST", "/api/file/import-content", api_file_import_content },
     { "POST", "/api/file/export",    api_file_export    },
     { "POST", "/api/tree",           api_tree_get       },
     { "GET",  "/api/tree",           api_tree_get       },

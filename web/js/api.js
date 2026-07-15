@@ -63,6 +63,17 @@ const API = {
         return this._post('/api/file/import', { path: filepath });
     },
 
+    /* Import file content directly (bypasses browser path restriction).
+     * 直接导入文件内容（绕过浏览器路径限制）。
+     * filename: e.g. "test.json" — used to detect format
+     * content:  the raw text content of the file                 */
+    async importContent(filename, content) {
+        return this._post('/api/file/import-content', {
+            filename: filename,
+            content: content
+        });
+    },
+
     /* Export the tree to another format.
      * 将树导出为其他格式。                                         */
     async exportFile(filepath, format) {
