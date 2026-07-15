@@ -34,23 +34,32 @@
  * Internal helpers 内部辅助函数
  * ================================================================ */
 
-/* Read entire file into a raw byte buffer.
- * 将整个文件读入原始字节缓冲区。
- * Parameters 参数:
- *   filepath - Input file path 输入文件路径
- *   out_size - [out] Receives file size in bytes
- *              [输出] 接收文件大小（字节）
- * Returns: heap-allocated byte buffer, or NULL on error.
- * 返回值：堆分配的字节缓冲区，出错返回 NULL。
- * Caller must free() the buffer. 调用者必须 free() 缓冲区。       */
+/* Read entire file into a raw byte buffer (Unicode-safe).
+ * 将整个文件读入原始字节缓冲区（Unicode 安全路径）。
+ * On Windows, uses _wfopen with wide-character path to support
+ * Chinese/Unicode filenames that fopen cannot handle.
+ * 在 Windows 上使用 _wfopen + 宽字符路径，支持 fopen 无法处理的
+ * 中文/Unicode 文件名。                                         */
 static unsigned char* read_file_bytes(const char* filepath,
                                        long* out_size) {
     if (filepath == NULL || out_size == NULL) {
         return NULL;
     }
 
-    /* 以二进制模式打开文件 */
+#ifdef _WIN32
+    /* Convert UTF-8 path to wide string for _wfopen.
+     * 将 UTF-8 路径转换为宽字符串以使用 _wfopen。                */
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, filepath, -1, NULL, 0);
+    if (wlen <= 0) return NULL;
+    WCHAR* wpath = (WCHAR*)malloc(wlen * sizeof(WCHAR));
+    if (wpath == NULL) return NULL;
+    MultiByteToWideChar(CP_UTF8, 0, filepath, -1, wpath, wlen);
+
+    FILE* fp = _wfopen(wpath, L"rb");
+    free(wpath);
+#else
     FILE* fp = fopen(filepath, "rb");
+#endif
     if (fp == NULL) {
         return NULL;
     }
@@ -122,8 +131,18 @@ EncodingType encoding_detect(const char* filepath) {
         return ENC_UNKNOWN;
     }
 
-    /* 读取文件前 4 字节用于 BOM 检测 */
+    /* 读取文件前 4 字节用于 BOM 检测（Unicode 安全路径） */
+#ifdef _WIN32
+    int wlen2 = MultiByteToWideChar(CP_UTF8, 0, filepath, -1, NULL, 0);
+    if (wlen2 <= 0) return ENC_UNKNOWN;
+    WCHAR* wpath2 = (WCHAR*)malloc(wlen2 * sizeof(WCHAR));
+    if (wpath2 == NULL) return ENC_UNKNOWN;
+    MultiByteToWideChar(CP_UTF8, 0, filepath, -1, wpath2, wlen2);
+    FILE* fp = _wfopen(wpath2, L"rb");
+    free(wpath2);
+#else
     FILE* fp = fopen(filepath, "rb");
+#endif
     if (fp == NULL) {
         return ENC_UNKNOWN;
     }
@@ -637,8 +656,19 @@ bool encoding_write_file_utf8(const char* filepath,
         return false;
     }
 
-    /* 以二进制模式打开文件进行写入 */
+    /* Use Unicode-safe file open for Chinese path support.
+     * 使用 Unicode 安全的文件打开以支持中文路径。               */
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, filepath, -1, NULL, 0);
+    if (wlen <= 0) return false;
+    WCHAR* wpath = (WCHAR*)malloc(wlen * sizeof(WCHAR));
+    if (wpath == NULL) return false;
+    MultiByteToWideChar(CP_UTF8, 0, filepath, -1, wpath, wlen);
+    FILE* fp = _wfopen(wpath, L"wb");
+    free(wpath);
+#else
     FILE* fp = fopen(filepath, "wb");
+#endif
     if (fp == NULL) {
         return false;
     }

@@ -824,6 +824,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
             gui_log(_(STR_LOG_FORMATS),
                      g_gui.output_handler_count);
 
+            /* Apply i18n to initial window title and UI strings.
+             * 应用 i18n 到初始窗口标题和 UI 字符串。            */
+            gui_refresh_ui();
+
             return 0;
         }
 
